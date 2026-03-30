@@ -41,11 +41,22 @@ class Curator:
         try:
             result = json.loads(cleaned)
         except json.JSONDecodeError:
-            # Fallback: safe default if the model returns malformed output
             return {
                 "store": False,
                 "tier": "cold",
                 "reason": "Could not parse model response.",
+                "_raw": raw,
+            }
+
+        # Model occasionally returns a list — unwrap the first dict if so
+        if isinstance(result, list):
+            result = next((item for item in result if isinstance(item, dict)), {})
+
+        if not isinstance(result, dict):
+            return {
+                "store": False,
+                "tier": "cold",
+                "reason": "Unexpected response shape from model.",
                 "_raw": raw,
             }
 
