@@ -2,13 +2,22 @@ import ollama
 
 
 class Observer:
+    _RECALL_KEYWORDS = {
+        "remember", "earlier", "before", "previously", "you said", "we said",
+        "we decided", "what did we", "you mentioned", "we agreed", "last time",
+        "back to", "going back", "recall", "remind",
+    }
+
     def __init__(self, model: str = "llama3.2", max_words: int = 200):
         self.model = model
         self.max_words = max_words
         self.summary = ""
         self.trimmings = []
+        self.recall_trigger = False
 
     def add_message(self, role: str, content: str) -> None:
+        self.recall_trigger = self._check_recall(content)
+
         prompt = self._build_prompt(role, content)
         response = ollama.chat(
             model=self.model,
@@ -20,6 +29,12 @@ class Observer:
             new_summary = self._trim(new_summary)
 
         self.summary = new_summary
+
+    def _check_recall(self, content: str) -> bool:
+        lowered = content.lower()
+        if "?" in content:
+            return True
+        return any(kw in lowered for kw in self._RECALL_KEYWORDS)
 
     def _build_prompt(self, role: str, content: str) -> str:
         if not self.summary:
