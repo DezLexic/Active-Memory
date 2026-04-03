@@ -1,58 +1,84 @@
+"""
+observer.py
+
+Updates the Bucket's rolling summary whenever a message pair is evicted
+from the recent-messages stack.
+
+No model call is made unless a pair has actually been popped (popped_pair
+is not None), so turns that do not trigger eviction are free.
+
+One Ollama call per eviction.  The prompt instructs the model to extend
+the existing summary to capture what was just lost, preserving any
+decisions, preferences, constraints, or directions mentioned in the pair.
+"""
+
+from __future__ import annotations
+
 import ollama
+from bucket import Bucket
 
 
 class Observer:
-    _RECALL_KEYWORDS = {
-        "remember", "earlier", "before", "previously", "you said", "we said",
-        "we decided", "what did we", "you mentioned", "we agreed", "last time",
-        "back to", "going back", "recall", "remind",
-    }
+    """
+    Maintains the conversation summary stored inside the Bucket.
 
-    def __init__(self, model: str = "llama3.2", max_words: int = 200):
-        self.model = model
-        self.max_words = max_words
-        self.summary = ""
-        self.trimmings = []
-        self.recall_trigger = False
+    Parameters
+    ----------
+    model       Ollama model name used for summarisation.
+    max_words   Soft target word count passed to the model as a guide.
+                Keeps the summary from growing unboundedly.
+    """
 
-    def add_message(self, role: str, content: str) -> None:
-        self.recall_trigger = self._check_recall(content)
+    def __init__(self, model: str = "gemma3:4b", max_words: int = 600) -> None:
+        self._model     = model
+        self._max_words = max_words
 
-        prompt = self._build_prompt(role, content)
-        response = ollama.chat(
-            model=self.model,
+    # ── Public API ─────────────────────────────────────────────────────────────
+
+    def update(self, bucket: Bucket, popped_pair: dict[str, str] | None) -> None:
+        """
+        Update the Bucket's summary to reflect a recently evicted Q/A pair.
+
+        If popped_pair is None the stack was not yet full and nothing was
+        lost, so this method returns immediately without making any calls.
+
+        Parameters
+        ----------
+        bucket      The shared Bucket whose summary will be updated.
+        popped_pair The dict returned by bucket.push_message() when it
+                    evicts an old pair: {"question": str, "response": str}.
+                    Pass None (or the raw return value) when no eviction
+                    occurred.
+        """
+        if popped_pair is None:
+            return
+
+        current_summary = bucket.summary.strip() or "(no summary yet)"
+        question        = popped_pair["question"].strip()
+        response        = popped_pair["response"].strip()
+
+        prompt = (
+            f"You are maintaining a rolling summary of a conversation.\n\n"
+            f"CURRENT SUMMARY:\n{current_summary}\n\n"
+            f"MESSAGE PAIR BEING REMOVED FROM RECENT HISTORY:\n"
+            f"Q: {question}\n"
+            f"A: {response}\n\n"
+            f"Update the summary to incorporate the information in that message "
+            f"pair so nothing important is lost. Preserve all decisions, "
+            f"preferences, constraints, and directions that have been stated. "
+            f"Keep the summary under {self._max_words} words. "
+            f"Return only the updated summary with no preamble or commentary."
+        )
+
+        result = ollama.chat(
+            model=self._model,
             messages=[{"role": "user", "content": prompt}],
         )
-        new_summary = response.message.content.strip()
 
-        if len(new_summary.split()) > self.max_words:
-            new_summary = self._trim(new_summary)
+        updated_summary = result["message"]["content"].strip()
+        bucket.set_summary(updated_summary)
 
-        self.summary = new_summary
+    # ── Dunder helpers ─────────────────────────────────────────────────────────
 
-    def _check_recall(self, content: str) -> bool:
-        lowered = content.lower()
-        if "?" in content:
-            return True
-        return any(kw in lowered for kw in self._RECALL_KEYWORDS)
-
-    def _build_prompt(self, role: str, content: str) -> str:
-        if not self.summary:
-            return (
-                f"A conversation is starting. Summarize this opening message in a few sentences.\n\n"
-                f"{role.upper()}: {content}\n\n"
-                f"Respond with only the summary, no preamble."
-            )
-        return (
-            f"Below is a running summary of a conversation so far, followed by a new message.\n\n"
-            f"CURRENT SUMMARY:\n{self.summary}\n\n"
-            f"NEW MESSAGE ({role.upper()}): {content}\n\n"
-            f"Update the summary to include the new message. Keep it under {self.max_words} words. "
-            f"Respond with only the updated summary, no preamble."
-        )
-
-    def _trim(self, text: str) -> str:
-        words = text.split()
-        excess = words[: len(words) - self.max_words]
-        self.trimmings.append(" ".join(excess))
-        return " ".join(words[-self.max_words :])
+    def __repr__(self) -> str:
+        return f"Observer(model={self._model!r}, max_words={self._max_words})"
