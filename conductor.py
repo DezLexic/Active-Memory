@@ -30,10 +30,14 @@ class Conductor:
         self._processed_trimmings = len(self._observer.trimmings)
 
         # Associative recall if the Observer flagged a recall trigger
+        context = self._observer.summary
         if self._observer.recall_trigger:
-            self._reporter.associative_recall(message)
+            recalled = self._reporter.associative_recall(message)
+            if recalled:
+                memories = "\n".join(f"- {m}" for m in recalled)
+                context = f"{context}\n\nRECALLED FROM MEMORY:\n{memories}"
 
-        return self._observer.summary
+        return context
 
     def explicit_lookup(self, query: str) -> list[str]:
         return self._reporter.deliberate_lookup(query)

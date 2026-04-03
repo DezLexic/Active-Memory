@@ -3,7 +3,7 @@ from conductor import Conductor
 
 
 class ActiveAgent:
-    def __init__(self, conductor: Conductor, model: str = "llama3.2"):
+    def __init__(self, conductor: Conductor, model: str = "gemma3:4b"):
         self._conductor = conductor
         self._model = model
 
