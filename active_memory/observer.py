@@ -27,11 +27,19 @@ class Observer:
     model       Ollama model name used for summarisation.
     max_words   Soft target word count passed to the model as a guide.
                 Keeps the summary from growing unboundedly.
+    base_url    Base URL of the Ollama instance to use.
+                Defaults to http://localhost:11434.
     """
 
-    def __init__(self, model: str = "gemma3:4b", max_words: int = 600) -> None:
+    def __init__(
+        self,
+        model: str = "gemma3:4b",
+        max_words: int = 600,
+        base_url: str = "http://localhost:11434",
+    ) -> None:
         self._model     = model
         self._max_words = max_words
+        self._client    = ollama.Client(host=base_url)
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -70,7 +78,7 @@ class Observer:
             f"Return only the updated summary with no preamble or commentary."
         )
 
-        result = ollama.chat(
+        result = self._client.chat(
             model=self._model,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -81,4 +89,8 @@ class Observer:
     # ── Dunder helpers ─────────────────────────────────────────────────────────
 
     def __repr__(self) -> str:
-        return f"Observer(model={self._model!r}, max_words={self._max_words})"
+        return (
+            f"Observer(model={self._model!r}, "
+            f"max_words={self._max_words}, "
+            f"host={str(self._client._client.base_url)!r})"
+        )
