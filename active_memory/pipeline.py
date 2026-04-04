@@ -45,6 +45,10 @@ class Pipeline:
     max_recent_messages    Max Q/A pairs kept in the Bucket's recent stack.
     system_instructions    Optional override for the Bucket's system prompt
                            header.  Pass None to use the Bucket default.
+    observer_url           Ollama base URL for the Observer agent.
+                           Defaults to http://localhost:11434.
+    curator_url            Ollama base URL for the Curator agent.
+                           Defaults to http://localhost:11434.
     """
 
     def __init__(
@@ -53,6 +57,8 @@ class Pipeline:
         chroma_path: str = "./chroma_db",
         max_recent_messages: int = 5,
         system_instructions: str | None = None,
+        observer_url: str = "http://localhost:11434",
+        curator_url: str = "http://localhost:11434",
     ) -> None:
         self._model = model
 
@@ -71,8 +77,8 @@ class Pipeline:
 
         self._bucket      = Bucket(**bucket_kwargs)
         self._retrieval   = Retrieval(chroma_path=chroma_path)
-        self._observer    = Observer(model=model)
-        self._curator     = Curator(model=model, retrieval=self._retrieval)
+        self._observer    = Observer(model=model, base_url=observer_url)
+        self._curator     = Curator(model=model, retrieval=self._retrieval, base_url=curator_url)
         self._agent       = ActiveAgent(model=model)
 
     # ── Public API ─────────────────────────────────────────────────────────────

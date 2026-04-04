@@ -38,15 +38,19 @@ class Curator:
     ----------
     model       Ollama model name used for evaluation.
     retrieval   A Retrieval instance that owns the Chroma collection.
+    base_url    Base URL of the Ollama instance to use.
+                Defaults to http://localhost:11434.
     """
 
     def __init__(
         self,
         model: str = "gemma3:4b",
         retrieval: Retrieval | None = None,
+        base_url: str = "http://localhost:11434",
     ) -> None:
         self._model     = model
         self._retrieval = retrieval
+        self._client    = ollama.Client(host=base_url)
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -86,7 +90,7 @@ class Curator:
         )
 
         try:
-            result   = ollama.chat(
+            result   = self._client.chat(
                 model=self._model,
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -126,4 +130,7 @@ class Curator:
     # ── Dunder helpers ─────────────────────────────────────────────────────────
 
     def __repr__(self) -> str:
-        return f"Curator(model={self._model!r})"
+        return (
+            f"Curator(model={self._model!r}, "
+            f"host={str(self._client._client.base_url)!r})"
+        )
