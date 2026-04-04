@@ -16,9 +16,9 @@ Sequence on every chat() call
 5b. If a pair was popped -> Curator runs in a background daemon thread
 6. Return response string
 
-Observer and Curator both receive the popped pair.  The Curator also
-receives the current bucket summary so it has enough context to judge
-short or ambiguous exchanges accurately.
+Observer and Curator both receive only the popped pair.  The Curator
+evaluates the pair on its own and stores it if it contains an explicit
+decision, hard constraint, or established preference.
 
 Both background threads are daemon threads so they never block program exit.
 """
@@ -56,9 +56,18 @@ class Pipeline:
     ) -> None:
         self._model = model
 
-        bucket_kwargs: dict = {"max_recent": max_recent_messages}
+        _CONCISE = "Be concise. Answer directly. Do not over-explain."
+
         if system_instructions is not None:
-            bucket_kwargs["system_instructions"] = system_instructions
+            combined_instructions = f"{system_instructions}\n{_CONCISE}"
+        else:
+            from .bucket import _DEFAULT_SYSTEM_INSTRUCTIONS
+            combined_instructions = f"{_DEFAULT_SYSTEM_INSTRUCTIONS}\n{_CONCISE}"
+
+        bucket_kwargs: dict = {
+            "max_recent": max_recent_messages,
+            "system_instructions": combined_instructions,
+        }
 
         self._bucket      = Bucket(**bucket_kwargs)
         self._retrieval   = Retrieval(chroma_path=chroma_path)
@@ -68,7 +77,7 @@ class Pipeline:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def chat(self, user_message: str) -> str:
+    def chat(self, user_message: str, skip_observer: bool = False) -> str:
         """
         Run the full pipeline for one user exchange.
 
@@ -79,13 +88,16 @@ class Pipeline:
         3. Get the agent's response (the only step the user waits for).
         4. Push the completed pair onto the Bucket's recent stack; capture
            any evicted pair.
-        5. If a pair was evicted, launch Observer and Curator as background
-           daemon threads.
+        5. If a pair was evicted, launch Curator as a background daemon thread.
+           Also launch Observer unless skip_observer is True.
         6. Return the response string.
 
         Parameters
         ----------
         user_message    The raw message from the user.
+        skip_observer   When True, the Observer is not run on evicted pairs.
+                        Useful during batch ingestion where summary updates
+                        are not needed and the cost is not justified.
         """
         bucket = self._bucket
 
@@ -103,22 +115,18 @@ class Pipeline:
 
         # 5. Background memory work — only when a pair was evicted.
         if popped is not None:
-            summary_snapshot = bucket.summary
+            if not skip_observer:
+                threading.Thread(
+                    target=self._observer.update,
+                    args=(bucket, popped),
+                    daemon=True,
+                ).start()
 
-            observer_thread = threading.Thread(
-                target=self._observer.update,
-                args=(bucket, popped),
-                daemon=True,
-            )
-            curator_thread = threading.Thread(
+            threading.Thread(
                 target=self._curator.evaluate,
                 args=(popped,),
-                kwargs={"summary": summary_snapshot},
                 daemon=True,
-            )
-
-            observer_thread.start()
-            curator_thread.start()
+            ).start()
 
         # 6. Return response.
         return response

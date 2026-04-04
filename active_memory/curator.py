@@ -5,12 +5,11 @@ Evaluates an evicted message pair and stores it in Chroma if it is worth
 remembering.  Runs in the background after the Active Agent responds --
 the user never waits for it.
 
-Every popped pair is evaluated regardless of length.  Short exchanges can
-still contain important decisions -- word count is not a signal of importance.
-
-An optional conversation summary can be passed to evaluate() as context.
-When provided, the model sees the broader conversation before judging the
-pair, which improves accuracy on short or ambiguous exchanges.
+The Curator receives only the popped pair -- no summary, no external context.
+The prompt is direct: does this exchange contain an explicit decision, hard
+constraint, or established preference?  If yes, store it.  If the content is
+ambiguous or seems incomplete on its own, do not store it.  Be conservative --
+when in doubt, drop it.
 
 The model is asked to return a JSON object:
 
@@ -51,61 +50,38 @@ class Curator:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def evaluate(
-        self,
-        popped_pair: dict[str, str],
-        summary: str | None = None,
-    ) -> None:
+    def evaluate(self, popped_pair: dict[str, str]) -> None:
         """
         Evaluate a popped Q/A pair and store it in Chroma if worthwhile.
 
         Steps
         -----
-        1. Build a prompt, optionally prepending the current conversation
-           summary as context.
-        2. Make one Ollama call to judge whether the pair contains a
-           decision, preference, constraint, or direction.
+        1. Build a prompt from the pair alone.
+        2. Make one Ollama call to judge whether the pair contains an
+           explicit decision, hard constraint, or established preference.
         3. Parse the JSON response.
         4. If store is true, write to Chroma via retrieval.store().
 
         Parameters
         ----------
         popped_pair  Dict with keys "question" and "response".
-        summary      Optional current conversation summary.  When provided
-                     it is included in the prompt before the pair so the
-                     model has enough context to judge short or ambiguous
-                     exchanges accurately.
         """
         question = popped_pair.get("question", "").strip()
         response = popped_pair.get("response", "").strip()
         combined = f"{question} {response}"
 
-        # Build the context block only when a summary is supplied.
-        if summary and summary.strip():
-            context_block = (
-                "Here is the current conversation summary for context:\n"
-                f"{summary.strip()}\n\n"
-                "Now evaluate this exchange:\n"
-            )
-        else:
-            context_block = ""
-
         prompt = (
-            "You are evaluating a conversation message pair to decide whether "
-            "it is worth storing as a long-term memory.\n"
-            "Short exchanges can still contain important decisions -- word count "
-            "is not a signal of importance.\n\n"
-            f"{context_block}"
+            "You are deciding whether a conversation exchange is worth storing "
+            "as a long-term memory.\n\n"
             f"QUESTION:\n{question}\n\n"
             f"RESPONSE:\n{response}\n\n"
-            "Evaluate whether this pair contains any of the following:\n"
-            "- a decision made\n"
-            "- a preference established\n"
-            "- a constraint agreed on\n"
-            "- a direction chosen\n\n"
+            "Store it only if this exchange, on its own, contains an explicit "
+            "decision, a hard constraint, or an established preference.\n"
+            "If the content is ambiguous or seems incomplete without additional "
+            "context, do not store it. Be conservative -- when in doubt, drop it.\n\n"
             "Respond with a JSON object containing exactly two fields:\n"
-            "  store  : boolean (true if the pair is worth storing, false otherwise)\n"
-            "  reason : one sentence explaining your decision\n\n"
+            "  store  : boolean\n"
+            "  reason : one sentence\n\n"
             "Respond with only the JSON object. No preamble, no commentary."
         )
 
