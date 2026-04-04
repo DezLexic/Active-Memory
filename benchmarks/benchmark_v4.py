@@ -1467,13 +1467,58 @@ pipeline = Pipeline(
     max_recent_messages=5,
 )
 
+_TOTAL      = len(CHAT_LOG)
+_RECALL_IDX = 110          # indices 110-119 are recall questions; skip active agent timing
+turn_times: list[float] = []
+
 ingest_start = time.time()
 for i, msg in enumerate(CHAT_LOG):
+    role    = msg["role"].upper()
+    preview = _truncate(msg["content"], 55)
+    is_recall = (i >= _RECALL_IDX)
+    label   = "RECALL " if is_recall else ""
+
+    t0 = time.time()
     pipeline.chat(msg["content"], skip_observer=True)
-    if (i + 1) % 10 == 0:
-        print(f"  Ingested {i + 1}/120 messages ...")
+    t_turn = time.time() - t0
+    turn_times.append(t_turn)
+
+    # Per-message log: index, role, timing, eviction status, memory count
+    bucket        = pipeline.bucket
+    recent_count  = len(bucket.recent_messages)
+    mem_count     = bucket.memories.__len__() if bucket.memories else 0
+    stored_count  = pipeline.retrieval._collection.count()
+    eviction_flag = " [evicted]" if recent_count == bucket._max_recent else ""
+
+    print(
+        f"  [{i + 1:>3}/{_TOTAL}] {label}{role:<10}  "
+        f"{t_turn:>5.1f}s  "
+        f"stack={recent_count}/{bucket._max_recent}{eviction_flag}  "
+        f"stored={stored_count}  "
+        f"\"{preview}\""
+    )
+
 ingest_elapsed = time.time() - ingest_start
-print(f"\n  Ingestion complete in {ingest_elapsed:.1f}s")
+
+# Ingest summary stats
+avg_turn  = sum(turn_times) / len(turn_times)
+max_turn  = max(turn_times)
+max_idx   = turn_times.index(max_turn) + 1
+slow_turns = [(i + 1, t) for i, t in enumerate(turn_times) if t > avg_turn * 1.5]
+
+print()
+_print_divider("-")
+print(f"  Ingestion summary")
+_print_divider("-")
+print(f"  Total time     : {ingest_elapsed:.1f}s  ({_TOTAL} messages)")
+print(f"  Avg per turn   : {avg_turn:.2f}s")
+print(f"  Slowest turn   : {max_turn:.1f}s  (message {max_idx})")
+if slow_turns:
+    slow_str = "  ".join(f"#{idx}={t:.1f}s" for idx, t in slow_turns[:8])
+    print(f"  Slow turns     : {slow_str}")
+print(f"  Items in Chroma: {pipeline.retrieval._collection.count()}")
+print(f"  Bucket summary : {'set' if pipeline.bucket.summary else 'empty'}")
+_print_divider("-")
 print(f"  {pipeline!r}")
 print()
 
