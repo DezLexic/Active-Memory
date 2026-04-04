@@ -8,20 +8,33 @@ benchmark_v4.py
 Controlled comparison between a vanilla agent and the Active Memory pipeline.
 
   Agent A - Vanilla
-    For each recall question the entire 80-message chat log is packed into a
+    For each recall question the entire 120-message chat log is packed into a
     single system prompt and sent to Ollama alongside the question.  No
     compression, no retrieval.  The model sees everything but has to hold it
     all in its context window at once.
 
   Agent B - Active Memory
-    All 80 messages are batch-ingested via pipeline.chat().  This builds the
+    All 120 messages are batch-ingested via pipeline.chat().  This builds the
     summary (Observer) and memory store (Curator -> Retrieval) as if the
     conversation had actually happened.  Each recall question is then answered
     by the Active Agent, which reads from the compressed Bucket context.
 
-Six decisions are locked in during messages 1-15.  Messages 16-65 are normal
-development discussion that dilutes the early context.  Messages 66-80 are
-the ten recall questions (indices 65-79).
+Chat log design
+---------------
+  Messages 1-15    : six decisions emerge naturally from conversation.
+                     They are not labelled or announced -- they surface as
+                     conclusions from discussion.  A reader has to pay
+                     attention to catch them.
+  Messages 16-110  : development discussion with active noise.  At three
+                     points a team member suggests an alternative to an
+                     earlier decision.  The response to each suggestion is
+                     vague enough that a degraded agent could misread it as
+                     a reversal.  None of the original decisions are actually
+                     overturned.
+  Messages 111-120 : ten recall questions.  Each requires the agent to
+                     recall the original decision, the reasoning behind it,
+                     and reason about a challenge or complication introduced
+                     during the noise passages.
 
 Scoring: a judge Ollama call rates each response 1-5 against ground truth.
 Output:  results table, average scores and latencies, drift difference, and
@@ -38,781 +51,1223 @@ from active_memory import Pipeline
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 1.  CHAT LOG  (80 messages)
+# 1.  CHAT LOG  (120 messages)
 #
-#     Index  0-14  : six decisions, explicit choice + reason
-#     Index 15-64  : development discussion, dilutes early context
-#     Index 65-79  : ten recall questions (user role only; answered by agents)
+#     Index   0-14  : six decisions, emerging naturally from discussion
+#     Index  15-109 : development discussion, with noise at ~28-31, 55-58, 83-86
+#     Index 110-119 : ten recall questions (user role; answered by agents)
+#
+#     Noise passages:
+#       ~28-31  : MySQL floated as alternative database -- vague resolution
+#       ~55-58  : EKS/Kubernetes raised by new hire -- left open
+#       ~83-86  : Redis revisited as caching alternative -- sounds persuasive
 # ──────────────────────────────────────────────────────────────────────────────
 
 CHAT_LOG: list[dict] = [
 
-    # ── Decision block (messages 1-15, indices 0-14) ──────────────────────────
+    # ── Decisions emerge naturally (messages 1-15, indices 0-14) ─────────────
 
     {   # 0
         "role": "user",
         "content": (
-            "Decision one is locked: we are building this product with Elixir and the "
-            "Phoenix framework. The BEAM VM gives us lightweight process-per-connection "
-            "concurrency with no threads, supervision trees mean faults are isolated and "
-            "auto-recovered, and Phoenix LiveView lets us ship real-time interactive UI "
-            "without a separate JavaScript SPA. No React. No Vue. No Next.js. "
-            "Every interactive feature goes through LiveView."
+            "I want to settle the frontend architecture before we write a line of "
+            "code. I've been burned by SPA sprawl before -- separate build pipelines, "
+            "client-server state sync bugs, two deployment artifacts to keep in step. "
+            "My instinct is to go server-rendered with LiveView rather than building "
+            "a separate React or Vue app on top of a JSON API."
         ),
     },
     {   # 1
         "role": "assistant",
         "content": (
-            "Elixir and Phoenix is a strong choice for this. BEAM's actor model "
-            "scales horizontally and fault tolerance is structural rather than bolted on. "
-            "LiveView eliminates the client-server state sync problem, which means less "
-            "code and fewer race conditions. Ruling out SPA frameworks removes an entire "
-            "category of complexity. Decision one confirmed: Elixir, Phoenix, LiveView. "
-            "No SPA frameworks of any kind."
+            "LiveView has matured. Real-time updates, minimal JavaScript, one "
+            "deployment artifact, server-side rendering by default. You trade "
+            "some frontend flexibility for a dramatically simpler stack. "
+            "What's the backend language you have in mind?"
         ),
     },
     {   # 2
         "role": "user",
         "content": (
-            "Decision two: the database is PostgreSQL. We are not using CockroachDB, "
-            "PlanetScale, or any other distributed system. Plain PostgreSQL running on "
-            "a managed RDS instance. The team knows it, the tooling is mature, and we "
-            "do not have the scale to justify a distributed SQL database today. "
-            "Decision three: raw SQL only. No Ecto ORM, no query builders, no generated "
-            "queries. Every database call is a handwritten parameterised SQL query. "
-            "This is a hard codebase rule, not a preference."
+            "Elixir. The BEAM process model is genuinely different from anything "
+            "else for concurrent workloads -- lightweight processes, supervision "
+            "trees, fault isolation that doesn't require extra infrastructure. "
+            "And Phoenix is the natural fit. Same codebase for the backend "
+            "and the LiveView frontend, no Node layer."
         ),
     },
     {   # 3
         "role": "assistant",
         "content": (
-            "PostgreSQL on RDS is sensible — managed backups, read replicas, and "
-            "point-in-time recovery out of the box without owning the ops. Raw SQL only "
-            "is a discipline that pays off in long-running projects; execution plans stay "
-            "predictable and there is no ORM magic to debug under load. "
-            "Decision two: PostgreSQL on managed RDS. "
-            "Decision three: raw SQL, no Ecto, no query builders. "
-            "Authentication next."
+            "Elixir and Phoenix, LiveView for all interactive UI, no separate "
+            "SPA framework. That's a coherent stack. What's the data layer?"
         ),
     },
     {   # 4
         "role": "user",
         "content": (
-            "Decision four: authentication is passkeys only. No passwords. No magic links. "
-            "No OAuth. WebAuthn passkeys backed by device biometrics or hardware keys. "
-            "We store the public key credential, never a secret. There is no password "
-            "reset flow to build or maintain because there is nothing to reset. "
-            "Passkeys are phishing-resistant by design and the UX on modern devices is "
-            "faster than typing a password. This is the auth story for the product, full stop."
+            "Postgres. Managed RDS. We are not big enough to justify a distributed "
+            "database and I'm not paying the operational tax for CockroachDB or "
+            "PlanetScale at our scale. The team knows Postgres, the tooling is "
+            "mature, and managed RDS gives us backups and PITR without owning the "
+            "control plane."
         ),
     },
     {   # 5
         "role": "assistant",
         "content": (
-            "Passkeys are the right call for a greenfield product. No credential "
-            "storage liability, no phishing surface, and biometric UX is already "
-            "mainstream on mobile and desktop. WebAuthn support in modern browsers is "
-            "solid. The implementation surface is smaller than it sounds -- register "
-            "and authenticate RPCs, public key storage in PostgreSQL, and a CBOR parser. "
-            "Decision four confirmed: passkeys only, no passwords, no magic links, no OAuth."
+            "PostgreSQL on RDS is the pragmatic call. Managed backups, read "
+            "replicas on demand, and point-in-time recovery out of the box. "
+            "Are you going ORM or raw SQL?"
         ),
     },
     {   # 6
         "role": "user",
         "content": (
-            "Decision five is the deployment platform: AWS ECS with Fargate. "
-            "No Kubernetes. The team does not have Kubernetes expertise and I am not "
-            "willing to build that skillset on a production timeline. Fargate handles "
-            "the compute layer -- we define tasks, set the CPU and memory, and AWS runs "
-            "the containers. We keep three tasks running at minimum at all times for "
-            "availability. Auto-scaling is configured but the floor is three."
+            "Raw SQL. I've watched ORMs obscure what's actually hitting the "
+            "database until a query plan falls apart under load and nobody can "
+            "explain why. We write parameterized SQL, we read execution plans, "
+            "we know exactly what's going to the database. "
+            "No Ecto. No query builders. That's the rule for the whole codebase."
         ),
     },
     {   # 7
         "role": "assistant",
         "content": (
-            "Fargate removes the node management overhead entirely. No patching EC2 "
-            "instances, no managing node groups, no etcd to worry about. ECS task "
-            "definitions are declarative and deployable via the CLI or CDK. "
-            "Three-task minimum for availability aligns with the Phoenix cluster "
-            "distribution model -- LiveView PubSub works across nodes via pg module. "
-            "Decision five: AWS ECS Fargate, three-task minimum, no Kubernetes."
+            "Handwritten parameterized SQL keeps the execution paths transparent "
+            "and the performance debuggable. It takes more upfront discipline "
+            "but the long-term maintainability is worth it. "
+            "Authentication approach?"
         ),
     },
     {   # 8
         "role": "user",
         "content": (
-            "Decision six: caching layer is Memcached, not Redis. We evaluated both. "
-            "Memcached is simpler, multi-threaded, and we do not need Redis data "
-            "structures or persistence for our caching use case. We cache rendered "
-            "page fragments and query results. No session data in cache -- sessions "
-            "live in the database. No in-process caching of any kind; with multiple "
-            "tasks in ECS, in-process caches diverge and cause stale-read bugs. "
-            "Everything cached goes through Memcached."
+            "Passkeys. WebAuthn. I don't want stored passwords -- that's credential "
+            "storage liability and a reset flow to maintain forever. "
+            "I don't want magic links either; I've seen them become a delivery "
+            "reliability problem. And no OAuth -- I'm not making our auth path "
+            "dependent on Google or GitHub's uptime. "
+            "We implement WebAuthn, users authenticate with biometrics or hardware keys."
         ),
     },
     {   # 9
         "role": "assistant",
         "content": (
-            "Memcached is the right choice when you need a fast, durable, distributed "
-            "cache without Redis's feature surface. Multi-threaded means better core "
-            "utilisation on modern instances. Sessions in PostgreSQL rather than cache "
-            "is the safer default -- consistent reads, no cache-miss invalidation logic. "
-            "No in-process caching is critical with ECS multi-task: shared Memcached "
-            "is the only correct answer. "
-            "Decision six: Memcached for caching, no in-process caching, sessions in DB."
+            "Passkeys are the right call for a greenfield product. No stored "
+            "credentials, phishing-resistant by design, biometric UX is already "
+            "mainstream on modern devices and browsers. The implementation is "
+            "smaller than it looks: register, authenticate, sign count check. "
+            "What's the deployment target?"
         ),
     },
     {   # 10
         "role": "user",
         "content": (
-            "Good. The six decisions are now locked. To state them cleanly:\n"
-            "(1) Elixir + Phoenix + LiveView -- no SPA frameworks.\n"
-            "(2) PostgreSQL on managed RDS -- no distributed SQL.\n"
-            "(3) Raw SQL only -- no Ecto, no query builders.\n"
-            "(4) Passkeys only -- no passwords, no magic links, no OAuth.\n"
-            "(5) AWS ECS Fargate, three-task minimum -- no Kubernetes.\n"
-            "(6) Memcached for caching, no in-process cache, sessions in DB.\n"
-            "Nothing overrides these without a full team discussion. "
-            "Let's move on to the data model."
+            "ECS Fargate. We don't have Kubernetes expertise on the team and I'm "
+            "not building it on a production timeline. Fargate handles the "
+            "underlying compute -- we define task definitions, set CPU and memory, "
+            "AWS runs the containers. Three tasks minimum for availability. "
+            "Auto-scaling configured but the floor stays at three."
         ),
     },
     {   # 11
         "role": "assistant",
         "content": (
-            "Confirmed. Six decisions locked. The data model -- tell me the core "
-            "entities you are modelling and I'll help work through the schema."
+            "Fargate removes node management entirely. No patching EC2 instances, "
+            "no managing node groups. Task definitions are declarative and "
+            "rolling deploys are built in. Three-task floor gives you basic HA "
+            "without a pod disruption budget. Caching?"
         ),
     },
     {   # 12
         "role": "user",
         "content": (
-            "The core entities are: Workspace, User, Membership, Project, Task, "
-            "Comment, and Label. A Workspace owns Projects. Users belong to Workspaces "
-            "via Memberships with a role column. Projects contain Tasks. Tasks can have "
-            "Comments and Labels. That is the starting shape."
+            "Memcached. We looked at both Redis and Memcached. Our caching use "
+            "case is fragment caching and hot query results -- we don't need "
+            "persistence or Redis data structures. Memcached is simpler and "
+            "multi-threaded. "
+            "One hard constraint: no in-process caching anywhere in the codebase. "
+            "With multiple Fargate tasks, in-process caches diverge and you "
+            "get stale-read bugs that only appear under load."
         ),
     },
     {   # 13
         "role": "assistant",
         "content": (
-            "Clean hierarchy. Workspace -> Project -> Task is the ownership chain. "
-            "Membership is a join table with a role enum -- at minimum owner, admin, "
-            "member. Comment is a polymorphic or task-scoped entity. "
-            "Label is likely a many-to-many between Task and a labels table. "
-            "I'd suggest a task_labels join table rather than an array column to keep "
-            "queries composable. What does the Task status lifecycle look like?"
+            "Memcached is the right call when you need a fast distributed cache "
+            "without the Redis feature overhead. The in-process constraint is "
+            "critical -- an in-process cache is correct with one process and "
+            "wrong with more than one. Where do sessions live?"
         ),
     },
     {   # 14
         "role": "user",
         "content": (
-            "Task statuses: todo, in_progress, in_review, done, cancelled. "
-            "Stored as a varchar with a check constraint. Not an enum type in Postgres "
-            "because enum migration is painful. Status transitions are enforced in "
-            "application code, not in the database. We will write a raw SQL function "
-            "to log status transitions to an audit table."
+            "In the database. Session data lives in Postgres, not in the cache. "
+            "I've seen too many stale session bugs from cache-backed sessions. "
+            "Authenticated reads against Postgres are fast enough, and we get "
+            "consistent session state across all tasks."
         ),
     },
 
-    # ── Development discussion (messages 16-65, indices 15-64) ────────────────
+    # ── Development discussion (messages 16-110, indices 15-109) ─────────────
+    # Three noise passages woven in: MySQL (~28-31), EKS (~55-58), Redis (~83-86)
 
     {   # 15
         "role": "assistant",
         "content": (
-            "varchar with a check constraint is pragmatic. Adding a value to a Postgres "
-            "enum requires a lock; varchar + check constraint can be altered without "
-            "downtime. Application-layer state machine with a raw SQL audit log is clean. "
-            "What indexes do we put on the tasks table from the start?"
+            "Sessions in Postgres, caching in Memcached, no in-process state. "
+            "Clean separation. Let's talk about the data model. "
+            "What are the core entities?"
         ),
     },
     {   # 16
         "role": "user",
         "content": (
-            "Tasks table indexes: primary key on id, index on (project_id, status) "
-            "for the main task list query, index on (assignee_id) for the my-tasks view, "
-            "index on (due_date) for the upcoming filter. All defined in raw SQL "
-            "migration files with explicit names so drops are clean."
+            "Workspace, User, Membership, Project, Task, Comment, and Label. "
+            "Workspace owns Projects. Users belong to Workspaces via Memberships "
+            "with a role column. Projects contain Tasks. Tasks can have Comments "
+            "and Labels."
         ),
     },
     {   # 17
         "role": "assistant",
         "content": (
-            "Composite index on (project_id, status) covers the most common read path. "
-            "Naming indexes explicitly is good hygiene -- pg_dump includes names and "
-            "replication is cleaner. due_date index will need NULLS LAST if unset tasks "
-            "should sort to the bottom. Noted."
+            "Standard hierarchy. Workspace -> Project -> Task is the ownership "
+            "chain. Membership is a join table with a role enum: owner, admin, "
+            "member at minimum. Label is many-to-many with a task_labels join "
+            "table -- cleaner than an array column for query composition."
         ),
     },
     {   # 18
         "role": "user",
         "content": (
-            "Let's talk about the LiveView architecture. The main app has three "
-            "top-level LiveViews: WorkspaceLayout, ProjectBoard, and UserDashboard. "
-            "WorkspaceLayout is the shell -- sidebar, nav, notification tray. "
-            "ProjectBoard renders the kanban or list view of tasks. "
-            "UserDashboard is the personal view across all workspaces."
+            "Task statuses: todo, in_progress, in_review, done, cancelled. "
+            "Stored as varchar with a check constraint, not a Postgres enum type. "
+            "Enum migration requires a lock; varchar plus check constraint "
+            "can be altered without downtime. "
+            "Status transitions enforced in application code, logged to an audit table."
         ),
     },
     {   # 19
         "role": "assistant",
         "content": (
-            "Nesting LiveViews via live_render is the right pattern for this. "
-            "WorkspaceLayout handles auth state, workspace context, and global "
-            "notification subscriptions. ProjectBoard and UserDashboard mount inside it. "
-            "The PubSub topic structure should mirror the hierarchy: "
-            "workspace:{id}, project:{id}, user:{id}."
+            "varchar with check constraint is pragmatic. Adding a value to a "
+            "Postgres enum type requires a table lock; varchar avoids that. "
+            "Application-layer state machine with an audit log is clean and "
+            "testable without database triggers. "
+            "What indexes go on the tasks table from day one?"
         ),
     },
     {   # 20
         "role": "user",
         "content": (
-            "For real-time task updates the pattern is: when a task is mutated, "
-            "broadcast on the project:{id} topic. All connected ProjectBoard LiveViews "
-            "for that project receive the message and update in place. "
-            "No full page reload, no polling. The broadcast payload is the minimum "
-            "diff -- just the changed task struct."
+            "Composite index on (project_id, status) for the main task list. "
+            "Index on assignee_id for the my-tasks view. "
+            "Index on due_date with NULLS LAST so unset tasks sort to the bottom. "
+            "All defined in named raw SQL migration files so drops are clean."
         ),
     },
     {   # 21
         "role": "assistant",
         "content": (
-            "Minimal diff broadcast is the right tradeoff. Sending the full task list "
-            "on every change is expensive at scale. With the task struct as the payload "
-            "the LiveView can pattern-match on the id and update just that row in the "
-            "assigns. The handle_info callback is clean and testable."
+            "Composite on (project_id, status) covers the most common read path. "
+            "Naming indexes explicitly in migrations is good hygiene -- "
+            "pg_dump includes the names and concurrent index drops are cleaner. "
+            "NULLS LAST on due_date is easy to forget and painful to add later."
         ),
     },
     {   # 22
         "role": "user",
         "content": (
-            "The API surface: we need a JSON API in addition to LiveView for the "
-            "mobile client that will come later. Phoenix Router gets a /api/v1 scope "
-            "with its own pipeline. JWT authentication on the API routes -- not "
-            "passkeys, those are browser-only. JWTs are generated at login and "
-            "short-lived, 15 minutes, refreshed via a refresh token stored in the DB."
+            "LiveView architecture: three top-level LiveViews. "
+            "WorkspaceLayout is the shell -- sidebar, nav, notification tray. "
+            "ProjectBoard renders the kanban or list view. "
+            "UserDashboard is the personal view across all workspaces. "
+            "WorkspaceLayout wraps the other two via live_render."
         ),
     },
     {   # 23
         "role": "assistant",
         "content": (
-            "Separate /api/v1 scope with its own plug pipeline is the Phoenix idiomatic "
-            "approach. JWT for the REST API is fine -- passkeys authenticate the browser "
-            "session and the API gets a JWT derived from that session. "
-            "Short-lived access tokens with DB-stored refresh tokens is the right "
-            "security tradeoff. Refresh token rotation on use to detect reuse."
+            "Nesting via live_render is the right pattern. WorkspaceLayout "
+            "owns the auth state, workspace context, and notification PubSub "
+            "subscriptions. ProjectBoard and UserDashboard mount inside it. "
+            "PubSub topic structure should mirror the hierarchy: "
+            "workspace:{id}, project:{id}, user:{id}."
         ),
     },
     {   # 24
         "role": "user",
         "content": (
-            "Error handling policy: all database errors are logged with full context "
-            "-- query, params, error code -- and surfaced to the user as generic "
-            "messages. No raw Postgres error messages reach the client. "
-            "Constraint violations on known paths get specific user-facing messages. "
-            "Unknown errors get a generic 'something went wrong' plus a trace ID."
+            "Real-time task updates: when a task is mutated, broadcast on "
+            "the project:{id} topic. All connected ProjectBoard LiveViews "
+            "for that project receive the message and update in place. "
+            "Broadcast payload is just the changed task struct -- minimal diff."
         ),
     },
     {   # 25
         "role": "assistant",
         "content": (
-            "Full-context DB error logging with generic client messages is correct "
-            "from a security and UX perspective. Leaking constraint names or table "
-            "names to clients is an information disclosure risk. Trace IDs are "
-            "essential for support workflows -- the user can report the ID and "
-            "you can correlate it in the log aggregator."
+            "Minimal diff broadcast is the right tradeoff. Sending the full "
+            "task list on every change is expensive at scale. The LiveView "
+            "handle_info callback pattern-matches on the task id and updates "
+            "just that row in assigns. Clean and testable."
         ),
     },
     {   # 26
         "role": "user",
         "content": (
-            "CI/CD: GitHub Actions for the pipeline. On every push: mix format, "
-            "mix credo, mix dialyzer, mix test. Dialyzer runs on a cache of the PLT "
-            "so it does not rebuild from scratch on every run. The pipeline must be "
-            "green before any merge. No force-push to main."
+            "CI/CD: GitHub Actions. On every push: mix format, mix credo, "
+            "mix dialyzer, mix test. Dialyzer runs against a cached PLT "
+            "keyed on mix.lock hash to avoid rebuild on every run. "
+            "Pipeline must be green before any merge. No force-push to main."
         ),
     },
     {   # 27
         "role": "assistant",
         "content": (
-            "mix format + credo + dialyzer + test is the right Elixir CI stack. "
-            "PLT caching in GitHub Actions via cache key on the mix.lock hash is "
-            "standard. Dialyzer is slow on cold cache, fast on warm -- most teams "
-            "accept the cold cache cost on dependency changes. No force-push to "
-            "main is enforced via branch protection rules."
+            "mix format plus credo plus dialyzer plus test is the correct "
+            "Elixir CI stack. PLT cache on mix.lock hash is standard. "
+            "Dialyzer is slow on cold cache but fast on warm -- most teams "
+            "accept the cold cache cost on dependency updates. "
+            "Branch protection rules enforce the no-force-push policy."
         ),
     },
+
+    # ── NOISE 1: MySQL floated as alternative (~messages 29-32, indices 28-31) ─
+
     {   # 28
         "role": "user",
         "content": (
-            "Telemetry: we instrument all database queries via Postgrex telemetry "
-            "events, all LiveView lifecycle events via Phoenix.LiveView.Telemetry, "
-            "and custom business events via :telemetry.execute. "
-            "Metrics go to Prometheus via prometheus_ex. Dashboards in Grafana. "
-            "Alerting via PagerDuty for P1 and P2."
+            "I want to revisit the database question briefly. The ops team lead "
+            "came to me saying they have monitoring tooling and runbooks built "
+            "around MySQL specifically -- RDS MySQL, not Postgres. "
+            "They said the switch to Postgres would require rebuilding their "
+            "dashboards and on-call procedures from scratch. "
+            "Has anyone done a serious comparison for our workload?"
         ),
     },
     {   # 29
         "role": "assistant",
         "content": (
-            "Postgrex telemetry gives query duration, result size, and connection "
-            "pool stats without instrumentation in application code. Phoenix.LiveView "
-            "telemetry covers mount, handle_event, handle_info latencies -- critical "
-            "for catching slow callbacks. Prometheus + Grafana is the standard OSS "
-            "stack. PagerDuty escalation policies need to be set up before launch."
+            "MySQL InnoDB is production-grade. The gap between MySQL 8 and "
+            "Postgres has narrowed considerably. For a CRUD-heavy application "
+            "at our scale the performance characteristics are broadly similar. "
+            "The ops familiarity argument is real -- a team that knows their "
+            "database makes fewer mistakes under pressure."
         ),
     },
     {   # 30
         "role": "user",
         "content": (
-            "The Comment entity supports markdown. We render it server-side to HTML "
-            "using Earmark before storing the rendered HTML alongside the raw markdown. "
-            "We store both because re-rendering on read is expensive at comment volume. "
-            "HTML is sanitised before storage with HtmlSanitizeEx. "
-            "Sanitise first, store, render as raw HTML in LiveView."
+            "I said I'd think about it. The ops overhead reduction could be "
+            "significant if they're already running MySQL in production "
+            "elsewhere. I'll check whether the cost of rebuilding their "
+            "tooling is actually as high as they say."
         ),
     },
     {   # 31
         "role": "assistant",
         "content": (
-            "Storing both raw markdown and rendered HTML is the right tradeoff for "
-            "read-heavy comment threads. Sanitise then store is the correct order -- "
-            "sanitising on every read means trusting the sanitiser to be safe on "
-            "untrusted input every single time, which raises the blast radius of any "
-            "sanitiser bug. Sanitise once at write, trust the stored HTML."
+            "Worth verifying. The replication story is different -- Postgres "
+            "streaming replication versus MySQL GTID-based -- but both work "
+            "at our scale. If the ops team has significantly more depth in "
+            "MySQL monitoring and incident response, that's a meaningful "
+            "operational argument worth taking seriously."
         ),
     },
+
+    # ── Continued development discussion ─────────────────────────────────────
+
     {   # 32
         "role": "user",
         "content": (
-            "Pagination: cursor-based throughout. No page numbers. Cursors are "
-            "opaque base64-encoded tuples of (inserted_at, id). The query always "
-            "fetches page_size + 1 rows; if we get page_size + 1 we know there is "
-            "a next page and we return the extra row's cursor as the next_cursor. "
-            "This works correctly with the raw SQL constraint."
+            "Let's move on. The JSON API for the mobile client: "
+            "Phoenix Router gets an /api/v1 scope with its own plug pipeline. "
+            "We can't use passkeys on native mobile -- WebAuthn requires a "
+            "browser context. The API will use JWT authentication. "
+            "Short-lived access tokens, 15-minute TTL, "
+            "refresh tokens stored in the database."
         ),
     },
     {   # 33
         "role": "assistant",
         "content": (
-            "Cursor-based pagination with (inserted_at, id) is stable under concurrent "
-            "inserts, which page-number pagination is not. Fetching n+1 to detect "
-            "the next page is the cleanest approach -- no COUNT query, no off-by-one "
-            "on the last page. Base64 opaque cursors prevent clients from constructing "
-            "arbitrary offsets."
+            "Separate /api/v1 scope with its own plug pipeline is idiomatic "
+            "Phoenix. JWT for the REST API makes sense -- passkeys authenticate "
+            "the browser session and the API gets a JWT derived from that. "
+            "Refresh token rotation on use to detect replay. "
+            "Short-lived access tokens with DB-stored refresh tokens is the "
+            "right security tradeoff."
         ),
     },
     {   # 34
         "role": "user",
         "content": (
-            "File attachments: tasks and comments can have attachments. "
-            "Files upload directly to S3 using presigned URLs -- the server generates "
-            "the presigned URL, returns it to the client, the client uploads directly. "
-            "The server stores only the S3 key and metadata. "
-            "No files pass through our servers. Max file size 50MB enforced by S3 policy."
+            "Passkey registration flow: user visits /auth/register. "
+            "Server generates a cryptographically random challenge, stores "
+            "it in the session with a short TTL. Frontend calls "
+            "navigator.credentials.create with the challenge. User completes "
+            "biometric. Frontend sends the credential response to the server. "
+            "Server verifies, stores credential_id and public_key_cbor."
         ),
     },
     {   # 35
         "role": "assistant",
         "content": (
-            "Direct-to-S3 upload via presigned URLs is correct. Proxying uploads "
-            "through the application server wastes bandwidth, increases latency, and "
-            "requires buffering the full file in memory or disk. S3 enforces the "
-            "50MB limit server-side. Store the S3 key plus content_type, size, "
-            "and original_filename in the DB. Generate presigned download URLs "
-            "on demand rather than storing public URLs."
+            "Challenge generation with :crypto.strong_rand_bytes(32) and "
+            "session-stored TTL prevents replay. For most consumer apps you "
+            "skip full attestation verification and just verify the signature. "
+            "Store credential_id, public_key_cbor, sign_count, transports, "
+            "and user_id. The wax or webauthn_components library handles the "
+            "CBOR parsing and verification ceremony."
         ),
     },
     {   # 36
         "role": "user",
         "content": (
-            "Search: we will add full-text search using PostgreSQL's built-in FTS. "
-            "tsvector columns on tasks (title + description) and comments (body_raw). "
-            "Updated via trigger on insert and update. ts_query with websearch_to_tsquery "
-            "for the query side. We will not use Elasticsearch or Meilisearch -- "
-            "Postgres FTS is sufficient for our data volume."
+            "Authentication flow: server generates challenge. Frontend calls "
+            "navigator.credentials.get -- either with allowCredentials for "
+            "a known user or empty for conditional UI (discoverable credentials). "
+            "User completes biometric. Frontend sends assertion response. "
+            "Server verifies signature against stored public key, "
+            "checks sign_count to detect cloned credentials, creates session."
         ),
     },
     {   # 37
         "role": "assistant",
         "content": (
-            "Postgres FTS is the right call at this scale. tsvector maintained by "
-            "trigger keeps the index current without application changes. "
-            "websearch_to_tsquery handles quoted phrases and negation naturally. "
-            "The headline function can highlight matched terms in results. "
-            "No external search service means no sync lag and no extra ops."
+            "Sign count check is critical -- if stored_count >= received_count "
+            "the credential may be cloned. Policy decision whether to hard-reject "
+            "or flag and alert. Conditional UI is the modern passkey UX pattern "
+            "and worth supporting from day one. It lets the browser surface "
+            "the passkey prompt without the user typing a username."
         ),
     },
     {   # 38
         "role": "user",
         "content": (
-            "Notifications: users get in-app notifications and optional email. "
-            "In-app notifications are stored in a notifications table and pushed "
-            "to the user's browser via PubSub on the user:{id} topic. "
-            "Email notifications go through an Oban background job to an SES-backed "
-            "SMTP relay. Notification preferences are per-user per-event-type."
+            "Error handling: all database errors are logged with full context "
+            "-- query, params, error code -- and surfaced to the user as "
+            "generic messages. No raw Postgres error messages to the client. "
+            "Known constraint violations get specific messages. "
+            "Unknown errors get a generic message plus a trace ID."
         ),
     },
     {   # 39
         "role": "assistant",
         "content": (
-            "Oban for background jobs is the Elixir standard. Jobs are persisted "
-            "in PostgreSQL so they survive restarts and are exactly-once with "
-            "transactional guarantees. SES for email is cost-effective at low "
-            "volume. Per-user per-event-type preferences means a preferences table "
-            "with (user_id, event_type, channel, enabled) -- sparse but flexible."
+            "Leaking constraint names or table names to clients is an "
+            "information disclosure risk. Trace IDs are essential for support "
+            "workflows -- the user reports the ID, you correlate it in the "
+            "log aggregator. Full-context DB logging on the server side keeps "
+            "debugging viable without exposing internals."
         ),
     },
     {   # 40
         "role": "user",
         "content": (
-            "Let's discuss the passkey registration flow in detail. "
-            "User visits /auth/register. Server generates a challenge and stores it "
-            "in the session with a short TTL. Frontend calls navigator.credentials.create "
-            "with the challenge. User completes biometric. Frontend sends the credential "
-            "response to /auth/register POST. Server verifies the attestation, stores "
-            "the public key credential in the passkey_credentials table. User is logged in."
+            "Background jobs via Oban. Jobs are persisted in Postgres so they "
+            "survive restarts and are exactly-once with transactional guarantees. "
+            "Email notifications, data export, and scheduled aggregation jobs "
+            "all go through Oban. Critical path: enqueue after commit, "
+            "not inside the transaction."
         ),
     },
     {   # 41
         "role": "assistant",
         "content": (
-            "The registration flow is correct. Challenge generation should use "
-            "cryptographically strong random bytes -- :crypto.strong_rand_bytes(32). "
-            "Session-stored challenges with TTL prevent replay. Attestation verification "
-            "depends on whether you require device attestation or just basic passkey "
-            "support -- most consumer apps skip attestation verification and just "
-            "verify the signature. Store credential_id, public_key_cbor, sign_count, "
-            "transports, and user_id."
+            "Post-commit Oban enqueue is critical. Enqueuing inside the "
+            "transaction risks a job running before the commit, finding no "
+            "data, and failing. Oban's with_job/1 pattern or a manual "
+            "post-commit hook handles this. Postgres-backed job persistence "
+            "means no additional queue infrastructure."
         ),
     },
     {   # 42
         "role": "user",
         "content": (
-            "The passkey authentication flow: user visits /auth/login. "
-            "Server generates challenge. Frontend calls navigator.credentials.get "
-            "with allowCredentials list for that user if username was entered, "
-            "or empty for conditional UI. User completes biometric. "
-            "Frontend sends assertion response. Server verifies signature against "
-            "stored public key. Server checks sign_count to detect cloned credentials. "
-            "Session created, user redirected."
+            "Telemetry: Postgrex telemetry events for all database queries, "
+            "Phoenix.LiveView.Telemetry for LiveView lifecycle events, "
+            "custom business events via :telemetry.execute. "
+            "Metrics go to Prometheus via prometheus_ex. Dashboards in Grafana. "
+            "PagerDuty escalation for P1 and P2."
         ),
     },
     {   # 43
         "role": "assistant",
         "content": (
-            "Sign count verification is critical for detecting cloned credentials. "
-            "If stored_sign_count >= received_sign_count the credential may have been "
-            "cloned -- policy decision whether to hard-reject or flag and alert. "
-            "Conditional UI (discoverable credentials without username entry) is the "
-            "modern passkey UX pattern and worth supporting from the start. "
-            "The verification library for Elixir is wax or webauthn_components."
+            "Postgrex telemetry gives query duration, result size, and "
+            "connection pool saturation without application instrumentation. "
+            "Phoenix.LiveView telemetry covers mount, handle_event, "
+            "handle_info latencies -- critical for catching slow callbacks. "
+            "Prometheus plus Grafana is the standard OSS observability stack."
         ),
     },
     {   # 44
         "role": "user",
         "content": (
-            "Deployment pipeline: Dockerfile uses a multi-stage build. "
-            "Stage one: Elixir builder image, fetches deps, compiles, builds release. "
-            "Stage two: minimal runtime image, copies the release binary. "
-            "Final image is under 100MB. GitHub Actions builds and pushes to ECR. "
-            "ECS task definition updated via aws ecs update-service."
+            "Database migrations: we use mix ecto.migrate but since we are "
+            "raw SQL only, migration files use Ecto.Migration's execute/2 "
+            "with explicit up and down SQL. Migrations run as part of the "
+            "deployment pipeline before new ECS tasks start. "
+            "Migration failure aborts the deployment."
         ),
     },
     {   # 45
         "role": "assistant",
         "content": (
-            "Multi-stage Docker build for Elixir releases is standard. The mix release "
-            "binary is self-contained -- runtime image only needs the OS libraries "
-            "the BEAM links against, typically libc and libssl. Alpine-based runtime "
-            "images get under 80MB comfortably. ECR + ECS update-service with a "
-            "minimum healthy percent of 100 ensures zero-downtime deploys with "
-            "Fargate's rolling update."
+            "execute/2 in Ecto.Migration with raw SQL up and down is the "
+            "correct approach given the no-ORM constraint. Pre-traffic "
+            "migrations require backward-compatible changes for zero-downtime "
+            "deploys -- additive first, clean up old columns in a follow-up "
+            "migration after the old code is fully retired."
         ),
     },
     {   # 46
         "role": "user",
         "content": (
-            "Database migrations: we use mix ecto.migrate, but since we are raw SQL "
-            "only we write the migration files as raw SQL wrapped in Ecto.Migration's "
-            "execute/2 calls. Up and down. Migrations run as part of the deployment "
-            "pipeline before the new ECS tasks are started. "
-            "Migration failures abort the deployment."
+            "Rate limiting: plug_attack for the auth endpoints. "
+            "Three failed passkey attempts from the same IP in 60 seconds "
+            "triggers a 60-second block. "
+            "API endpoints get a per-token rate limit of 1000 requests "
+            "per minute, tracked in Memcached with a 60-second TTL counter."
         ),
     },
     {   # 47
         "role": "assistant",
         "content": (
-            "execute/2 in Ecto.Migration with raw SQL up and down is the correct "
-            "approach given the raw SQL constraint. Migrations run before traffic "
-            "shifts -- this requires backward-compatible migrations for zero-downtime "
-            "deploys. Additive changes first, then clean up old columns in a follow-up "
-            "migration after the old code is fully retired."
+            "plug_attack with Memcached as the backing store works well. "
+            "Per-IP auth throttling is the right scope for passkey failures. "
+            "API rate limiting per token in Memcached: increment a counter "
+            "with a 60-second TTL, return 429 if over 1000. "
+            "Simple and correct for our scale."
         ),
     },
     {   # 48
         "role": "user",
         "content": (
-            "Rate limiting: Phoenix has plug_attack which we will use for the auth "
-            "endpoints. Three failed passkey authentication attempts from the same IP "
-            "in 60 seconds triggers a 60-second block. API endpoints get a per-token "
-            "rate limit of 1000 requests per minute tracked in Memcached."
+            "Comments support Markdown. Server-side render to HTML via Earmark "
+            "before storage. Store both raw Markdown and rendered HTML -- "
+            "re-rendering on every read is expensive at comment volume. "
+            "HTML is sanitised with HtmlSanitizeEx before storage. "
+            "Sanitise then store, never sanitise on read."
         ),
     },
     {   # 49
         "role": "assistant",
         "content": (
-            "plug_attack with Memcached as the backing store works well. "
-            "Per-IP auth throttling is the right scope for passkey failures -- "
-            "account enumeration is not possible with passkeys so IP-based throttling "
-            "is sufficient. API rate limiting per-token in Memcached is straightforward: "
-            "increment a counter with a 60-second TTL, reject if over 1000."
+            "Store both and sanitise at write is correct. Sanitising on "
+            "every read trusts the sanitiser to be safe on untrusted input "
+            "every single time -- that raises the blast radius of any "
+            "sanitiser bug. Sanitise once at write, trust the stored HTML."
         ),
     },
     {   # 50
         "role": "user",
         "content": (
-            "Let's talk about the Workspace billing model. Each Workspace is on a plan: "
-            "free, pro, or enterprise. Plan limits: free gets 5 projects and 10 members, "
-            "pro gets unlimited projects and 50 members, enterprise is negotiated. "
-            "Plan is stored on the workspace record. Limit enforcement is in the "
-            "application layer via a policy module, not in the database."
+            "Full-text search using Postgres built-in FTS. tsvector columns "
+            "on tasks (title plus description) and comments (body_raw). "
+            "Updated by trigger on insert and update. "
+            "websearch_to_tsquery for query parsing. "
+            "We are not adding Elasticsearch or Meilisearch at this stage."
         ),
     },
     {   # 51
         "role": "assistant",
         "content": (
-            "Application-layer policy enforcement with a policy module is testable "
-            "and flexible. A Policies.Workspace module with functions like "
-            "can_add_project?(workspace) and can_add_member?(workspace) keeps the "
-            "enforcement logic in one place. Stripe integration will handle plan "
-            "upgrades -- webhook on subscription updates triggers a workspace plan update."
+            "Postgres FTS is correct for our data volume. tsvector maintained "
+            "by trigger keeps the index current without application changes. "
+            "websearch_to_tsquery handles quoted phrases and negation naturally. "
+            "No external search service means no sync lag and no extra ops."
         ),
     },
     {   # 52
         "role": "user",
         "content": (
-            "Feature flags: we will use a simple database-backed feature flag system. "
-            "A feature_flags table with flag_name, enabled, and rollout_percentage. "
-            "A FlagCache module reads flags from Memcached with a 30-second TTL, "
-            "falls back to the database on cache miss. Flag evaluation is in the "
-            "application layer via a Flags.enabled?(flag_name, user) function."
+            "File attachments: tasks and comments can have attachments. "
+            "Presigned S3 URLs -- server generates the URL, client uploads "
+            "directly. Server stores only the S3 key and metadata. "
+            "No files pass through our application servers. "
+            "50MB max enforced by S3 bucket policy."
         ),
     },
     {   # 53
         "role": "assistant",
         "content": (
-            "Database-backed feature flags with Memcached caching is appropriately "
-            "simple for an early-stage product. No external flag service to maintain. "
-            "Rollout percentage with user ID hashing gives deterministic per-user "
-            "flag assignment. The 30-second cache TTL means flag changes propagate "
-            "within half a minute without a cache flush mechanism."
+            "Direct-to-S3 upload via presigned URLs is correct. Proxying "
+            "uploads through the application server wastes bandwidth, "
+            "increases latency, and requires buffering the full file. "
+            "Store S3 key, content_type, size, and original_filename. "
+            "Generate presigned download URLs on demand, not stored publicly."
         ),
     },
     {   # 54
         "role": "user",
         "content": (
-            "Audit logging: all mutations to core entities -- Task create/update/delete, "
-            "Membership create/update/delete, Project create/update/delete -- "
-            "are written to an audit_events table. Schema: entity_type, entity_id, "
-            "action, actor_user_id, changes (jsonb), inserted_at. "
-            "Written in the same database transaction as the mutation."
+            "Billing model: Workspace plans are free, pro, or enterprise. "
+            "Free: 5 projects, 10 members. Pro: unlimited projects, 50 members. "
+            "Enterprise: negotiated. Plan stored on the workspace record. "
+            "Limit enforcement is in a Policies module in the application layer, "
+            "not in the database."
         ),
     },
+
+    # ── NOISE 2: EKS/Kubernetes raised by new hire (~messages 56-59, indices 55-58) ─
+
     {   # 55
-        "role": "assistant",
+        "role": "user",
         "content": (
-            "Same-transaction audit log writes are the correct approach for "
-            "consistency -- no audit record without the mutation, no mutation without "
-            "the audit record. jsonb changes column is flexible. Indexes on "
-            "(entity_type, entity_id) and (actor_user_id, inserted_at) cover the "
-            "main query patterns. Partition by inserted_at month if volume grows."
+            "Quick sidebar. Our new DevOps engineer starts Monday. She has "
+            "three Kubernetes certifications and two years of EKS production "
+            "experience. When I told her we're using Fargate she pushed back "
+            "pretty hard. Said we'd have less observability -- no access to "
+            "node-level metrics, limited networking visibility, fewer knobs "
+            "to tune under load. She's asking if EKS is worth reconsidering."
         ),
     },
     {   # 56
-        "role": "user",
+        "role": "assistant",
         "content": (
-            "Let's talk through the task assignment notification flow. "
-            "User A assigns Task T to User B. The update mutation fires. "
-            "Audit log is written in the same transaction. "
-            "After commit, an Oban job is enqueued for the email notification. "
-            "Simultaneously, a PubSub broadcast goes to user:{B.id}. "
-            "User B's dashboard LiveView receives the message and increments "
-            "the notification badge."
+            "She has a point about observability. Fargate abstracts the node "
+            "layer which means you lose direct access to node-level metrics, "
+            "and some cluster tooling assumes node access. EKS with managed "
+            "node groups has gotten significantly simpler to operate -- if "
+            "she's bringing two years of EKS production experience, the "
+            "operational complexity argument weakens considerably."
         ),
     },
     {   # 57
-        "role": "assistant",
+        "role": "user",
         "content": (
-            "Post-commit Oban job enqueue is critical -- enqueuing inside the "
-            "transaction risks a job running before the commit, finding no data, "
-            "and failing. Oban's with_job/1 + Multi or manual post-commit hook "
-            "handles this correctly. The PubSub broadcast can go inside the "
-            "LiveView channel after handle_event returns -- it races with the "
-            "commit but that is acceptable for UI updates."
+            "I said I'd look at it. The cost model is also different -- "
+            "Fargate tasks are more expensive per vCPU than EC2 nodes in "
+            "some configurations, and EKS with spot node groups could cut "
+            "compute costs. I told her to put together a comparison before "
+            "we've committed anything in code."
         ),
     },
     {   # 58
-        "role": "user",
-        "content": (
-            "Testing strategy: ExUnit for all unit and integration tests. "
-            "Database tests use the sandbox adapter for isolation. "
-            "LiveView tests via Phoenix.LiveViewTest -- mount, send_event, "
-            "assert_patch, assert_push. No end-to-end browser tests in CI -- "
-            "they are too flaky. Instead we rely on comprehensive LiveView "
-            "unit tests that cover all user interactions."
-        ),
-    },
-    {   # 59
         "role": "assistant",
         "content": (
-            "Phoenix.LiveViewTest covers the full LiveView lifecycle without a "
-            "browser. Sandbox adapter gives each test its own transaction that "
-            "rolls back at the end, so DB state is isolated without truncation. "
-            "Skipping browser tests in CI is pragmatic -- the flakiness cost "
-            "outweighs the coverage benefit at early stage. Manual browser smoke "
-            "tests before releases is a reasonable substitute."
+            "The cost comparison does favor EKS at moderate scale. Spot "
+            "node groups for non-critical workloads can reduce compute costs "
+            "significantly. If she has the depth to own the cluster, the "
+            "operational overhead argument becomes much weaker. Worth having "
+            "the formal comparison before finalizing the deployment story."
+        ),
+    },
+
+    # ── Continued development discussion ─────────────────────────────────────
+
+    {   # 59
+        "role": "user",
+        "content": (
+            "Notifications: in-app and optional email. In-app notifications "
+            "stored in a notifications table and pushed to the browser via "
+            "PubSub on the user:{id} topic. Email goes through an Oban job "
+            "to an SES-backed SMTP relay. Per-user per-event-type preferences."
         ),
     },
     {   # 60
-        "role": "user",
+        "role": "assistant",
         "content": (
-            "Secret management: all secrets are stored in AWS Secrets Manager. "
-            "The ECS task definition references secrets by ARN. "
-            "The Elixir application reads them at startup via the AWS SDK. "
-            "No secrets in environment variables baked into the Docker image. "
-            "Rotation is handled by Secrets Manager with a Lambda rotation function "
-            "for the database credentials."
+            "Oban for email jobs is the right call -- persisted in Postgres, "
+            "exactly-once semantics, retry with backoff. SES for email is "
+            "cost-effective at low volume. Per-user per-event-type preferences "
+            "table: (user_id, event_type, channel, enabled). "
+            "Sparse but flexible as the notification types grow."
         ),
     },
     {   # 61
-        "role": "assistant",
+        "role": "user",
         "content": (
-            "AWS Secrets Manager injection at task startup is correct. ECS native "
-            "secrets integration decrypts and injects at container start without "
-            "the application needing IAM SDK calls directly. Automatic rotation "
-            "with a Lambda rotator for RDS credentials is the managed approach -- "
-            "Secrets Manager handles the rotation schedule and the application "
-            "re-reads credentials on reconnect after a connection failure."
+            "Cursor-based pagination throughout. No page numbers. "
+            "Cursors are opaque base64-encoded (inserted_at, id) tuples. "
+            "Fetch page_size plus one to detect the next page without a "
+            "COUNT query. Return the extra row's cursor as next_cursor."
         ),
     },
     {   # 62
-        "role": "user",
+        "role": "assistant",
         "content": (
-            "Backups: RDS automated daily snapshots with 30-day retention. "
-            "Point-in-time recovery enabled. S3 buckets with versioning enabled "
-            "and a 90-day lifecycle on old versions. "
-            "Quarterly restore drills to verify RDS snapshots are usable. "
-            "Backup metrics alerted via CloudWatch -- alert if no snapshot "
-            "in 26 hours."
+            "Cursor pagination on (inserted_at, id) is stable under concurrent "
+            "inserts where page numbers are not. Fetching n+1 to detect the "
+            "next page avoids the COUNT and handles the last page cleanly. "
+            "Opaque base64 cursors prevent clients from constructing "
+            "arbitrary offsets."
         ),
     },
     {   # 63
-        "role": "assistant",
+        "role": "user",
         "content": (
-            "30-day RDS snapshot retention with PITR is solid. 26-hour CloudWatch "
-            "alert gives a buffer over the daily schedule. Quarterly restore drills "
-            "are essential -- an untested backup is not a backup. S3 versioning with "
-            "90-day lifecycle on old versions balances recovery capability against "
-            "storage cost. Object Lock on the backup bucket can prevent accidental "
-            "deletion if your threat model includes insider risk."
+            "Secret management: everything in AWS Secrets Manager. "
+            "ECS task definitions reference secrets by ARN. "
+            "The application reads them at container startup. "
+            "No secrets baked into the Docker image or stored in "
+            "environment variables that ship with the artifact. "
+            "Database credentials rotate via a Lambda rotation function."
         ),
     },
     {   # 64
-        "role": "user",
+        "role": "assistant",
         "content": (
-            "Good. I think we've covered the main architecture concerns. "
-            "The decisions from the start of the conversation remain the "
-            "foundation. Let's move to the recall check to make sure we "
-            "have not drifted from what we decided."
+            "ECS native secrets integration decrypts and injects at container "
+            "start without the application needing IAM SDK calls. "
+            "Lambda rotation for RDS credentials is the managed approach -- "
+            "Secrets Manager handles the schedule and the application "
+            "re-reads on reconnect after a connection failure."
         ),
     },
-
-    # ── Recall questions (messages 66-80, indices 65-79) ─────────────────────
-    # These are posed as user messages. Both agents answer them independently.
-
     {   # 65
         "role": "user",
         "content": (
-            "RECALL CHECK 1: What language and framework did we decide on "
-            "at the very start of this conversation, and what did we explicitly "
-            "rule out on the frontend side?"
+            "Backups: RDS automated daily snapshots with 30-day retention, "
+            "point-in-time recovery enabled. S3 versioning with a 90-day "
+            "lifecycle on old versions. Quarterly restore drills to verify "
+            "snapshots are actually usable. CloudWatch alert if no snapshot "
+            "in 26 hours."
         ),
     },
     {   # 66
-        "role": "user",
+        "role": "assistant",
         "content": (
-            "RECALL CHECK 2: What database are we using and where is it hosted? "
-            "What was the reasoning given?"
+            "30-day RDS retention with PITR is solid. 26-hour alert gives "
+            "a buffer over the daily schedule. Quarterly restore drills are "
+            "essential -- an untested backup is not a backup. S3 versioning "
+            "with lifecycle policy balances recovery capability against cost."
         ),
     },
     {   # 67
         "role": "user",
         "content": (
-            "RECALL CHECK 3: What is the query policy for database access? "
-            "Is there any ORM or query builder allowed?"
+            "Audit logging: all mutations to core entities written to an "
+            "audit_events table in the same database transaction. "
+            "Schema: entity_type, entity_id, action, actor_user_id, "
+            "changes as jsonb, inserted_at. "
+            "No mutation without the audit record, no audit record without "
+            "the mutation."
         ),
     },
     {   # 68
-        "role": "user",
+        "role": "assistant",
         "content": (
-            "RECALL CHECK 4: What is the authentication method for the main "
-            "application? What was explicitly ruled out?"
+            "Same-transaction audit writes are correct for consistency. "
+            "jsonb for the changes column is flexible enough to handle "
+            "different entity shapes. Indexes on (entity_type, entity_id) "
+            "and (actor_user_id, inserted_at) cover the main query patterns. "
+            "Partition by inserted_at month if write volume grows."
         ),
     },
     {   # 69
         "role": "user",
         "content": (
-            "RECALL CHECK 5: What is the deployment platform and what compute "
-            "model are we using? What was explicitly ruled out?"
+            "Feature flags: database-backed, simple. "
+            "A feature_flags table: flag_name, enabled, rollout_percentage. "
+            "A FlagCache module reads from Memcached with a 30-second TTL, "
+            "falls back to the database on miss. "
+            "Flags.enabled?(flag_name, user) in application code."
         ),
     },
     {   # 70
-        "role": "user",
+        "role": "assistant",
         "content": (
-            "RECALL CHECK 6: What is the caching technology? "
-            "What constraint was placed on in-process caching, and where do sessions live?"
+            "Database-backed flags with Memcached caching is appropriately "
+            "simple for an early product. Rollout percentage with user ID "
+            "hashing gives deterministic per-user assignment. "
+            "30-second TTL means flag changes propagate within half a minute "
+            "without needing a cache flush mechanism."
         ),
     },
     {   # 71
         "role": "user",
         "content": (
-            "RECALL CHECK 7: For the JSON API that was discussed for the mobile "
-            "client, what authentication method is used -- and is this the same "
-            "as the main app authentication?"
+            "Workspace invitation flow: invite by email. Server generates "
+            "a signed token, stores it in the invitations table with TTL. "
+            "Email sends a link containing the token. Recipient clicks, "
+            "token is validated, Membership is created. "
+            "Invitations can be revoked by cancelling the token."
         ),
     },
     {   # 72
-        "role": "user",
+        "role": "assistant",
         "content": (
-            "RECALL CHECK 8: We discussed caching and rate limiting together. "
-            "What store backs the API rate limiting, and what are the rate limit parameters?"
+            "Signed token in the invitations table with a TTL is clean. "
+            "Store the token hash, not the raw token -- the link contains "
+            "the raw token, the database stores the hash so a DB read "
+            "doesn't expose the invitation URL. "
+            "Single-use: invalidate on acceptance."
         ),
     },
     {   # 73
         "role": "user",
         "content": (
-            "RECALL CHECK 9: Where do session credentials live in this system -- "
-            "in the cache, in the database, or somewhere else? "
-            "Be specific about what was decided."
+            "Task assignment notification: User A assigns Task T to User B. "
+            "Mutation fires, audit log written in the same transaction. "
+            "After commit, Oban job enqueued for email notification. "
+            "PubSub broadcast on user:{B.id}. "
+            "User B's dashboard LiveView increments the notification badge."
         ),
     },
     {   # 74
+        "role": "assistant",
+        "content": (
+            "Post-commit Oban enqueue is critical here. Enqueueing inside "
+            "the transaction risks the job running before the commit completes. "
+            "PubSub broadcast can go after handle_event returns -- it races "
+            "with the commit but that's acceptable for a UI update."
+        ),
+    },
+    {   # 75
         "role": "user",
         "content": (
-            "RECALL CHECK 10: If someone on the team proposed switching from the "
-            "current caching technology to Redis, would that be consistent or "
-            "inconsistent with what was decided? What was the actual decision and why?"
+            "Testing strategy: ExUnit for all unit and integration tests. "
+            "Database tests use the sandbox adapter for isolation. "
+            "LiveView tests via Phoenix.LiveViewTest. "
+            "No end-to-end browser tests in CI -- too flaky at this stage. "
+            "Comprehensive LiveView unit tests cover all user interactions."
+        ),
+    },
+    {   # 76
+        "role": "assistant",
+        "content": (
+            "Phoenix.LiveViewTest covers the full LiveView lifecycle without "
+            "a browser. Sandbox adapter gives each test its own transaction "
+            "that rolls back at the end. Skipping browser tests in CI is "
+            "pragmatic -- the flakiness cost outweighs the coverage benefit "
+            "at early stage."
+        ),
+    },
+    {   # 77
+        "role": "user",
+        "content": (
+            "Docker build: multi-stage. Stage one is the Elixir builder image "
+            "-- fetch deps, compile, build the mix release. Stage two is a "
+            "minimal runtime image with just the release binary. "
+            "Final image under 100MB. GitHub Actions builds and pushes to ECR. "
+            "ECS service update via aws ecs update-service."
+        ),
+    },
+    {   # 78
+        "role": "assistant",
+        "content": (
+            "Mix release binary is self-contained -- the runtime image only "
+            "needs the OS libraries the BEAM links against. Alpine-based "
+            "runtime images get under 80MB comfortably. "
+            "ECR plus ECS update-service with minimum healthy percent 100 "
+            "ensures zero-downtime rolling deploys."
+        ),
+    },
+    {   # 79
+        "role": "user",
+        "content": (
+            "RBAC model: roles live on the Membership record, not on the user. "
+            "Owner, admin, member. Permissions enforced by a Policies module. "
+            "No database-level row security -- application layer only. "
+            "Authorization checks happen at the LiveView mount and "
+            "in every mutation path."
+        ),
+    },
+    {   # 80
+        "role": "assistant",
+        "content": (
+            "Application-layer RBAC in a Policies module is testable and "
+            "visible. Row-level security in Postgres is powerful but adds "
+            "implicit behavior that's hard to reason about in application "
+            "code. Explicit checks at mount and mutation boundaries are "
+            "clearer and easier to audit."
+        ),
+    },
+    {   # 81
+        "role": "user",
+        "content": (
+            "Data export: workspace owners can export all data as CSV or JSON. "
+            "Export job runs via Oban, generates the file, uploads to S3, "
+            "sends a download link by email. "
+            "Large exports are streamed to S3 in parts, not held in memory."
+        ),
+    },
+    {   # 82
+        "role": "assistant",
+        "content": (
+            "S3 multipart upload for large exports is correct -- holding "
+            "a large export in memory risks OOM on a constrained Fargate task. "
+            "Stream the query results, chunk into parts, upload in sequence. "
+            "Oban handles retry if the job fails partway through."
+        ),
+    },
+
+    # ── NOISE 3: Redis revisited as caching alternative (~messages 84-87, indices 83-86) ─
+
+    {   # 83
+        "role": "user",
+        "content": (
+            "I want to revisit the caching decision again. I've been looking "
+            "more closely at our LiveView clustering setup. Phoenix PubSub has "
+            "a Redis adapter that some teams use for multi-node distribution. "
+            "Redis sorted sets would also make the rate limiting logic cleaner "
+            "than a Memcached counter. And if we're running Redis for PubSub "
+            "anyway, why have two separate caching systems?"
+        ),
+    },
+    {   # 84
+        "role": "assistant",
+        "content": (
+            "The consolidation argument is real. If Redis is already in the "
+            "stack for PubSub, the case for Memcached weakens -- you're "
+            "paying for operational complexity of two systems instead of one. "
+            "Redis sorted sets would make sliding-window rate limiting more "
+            "elegant. And Redis Cluster has native pub/sub which aligns "
+            "with the notification architecture."
+        ),
+    },
+    {   # 85
+        "role": "user",
+        "content": (
+            "The data structure richness is genuinely appealing. "
+            "I'm going to research this further before the next architecture "
+            "review. The persistence options might also simplify the "
+            "session question, though I know we said sessions go in Postgres."
+        ),
+    },
+    {   # 86
+        "role": "assistant",
+        "content": (
+            "Redis has become the default caching layer for a reason. "
+            "The operational gap between Redis Cluster and Memcached has "
+            "narrowed. If Redis is already present in the stack, its "
+            "feature set makes a lot of other problems easier to solve. "
+            "It's worth putting together a formal comparison."
+        ),
+    },
+
+    # ── Continued development discussion ─────────────────────────────────────
+
+    {   # 87
+        "role": "user",
+        "content": (
+            "Analytics and reporting: materialized views in Postgres for "
+            "aggregate metrics -- tasks completed per week, member activity, "
+            "project burndown. Refreshed by a scheduled Oban job. "
+            "No external analytics service at this stage."
+        ),
+    },
+    {   # 88
+        "role": "assistant",
+        "content": (
+            "Materialized views refreshed by Oban jobs are the right call "
+            "for aggregate metrics at our scale. CONCURRENT REFRESH avoids "
+            "blocking reads. No external analytics service means no data "
+            "export compliance surface and no vendor dependency for internal "
+            "metrics."
+        ),
+    },
+    {   # 89
+        "role": "user",
+        "content": (
+            "Workspace settings model: settings stored as a JSONB column "
+            "on the workspace record for flexible schema evolution. "
+            "Typed access via an Elixir struct that serializes to and "
+            "from the JSONB column. Validation at the application layer."
+        ),
+    },
+    {   # 90
+        "role": "assistant",
+        "content": (
+            "JSONB with a typed struct wrapper gives you schema evolution "
+            "flexibility without Postgres schema migrations for every new "
+            "setting. The struct validation in application code catches "
+            "malformed values before they reach the database."
+        ),
+    },
+    {   # 91
+        "role": "user",
+        "content": (
+            "Search result ranking: tsvector with ts_rank for basic relevance. "
+            "Boost title matches over description matches using weighted "
+            "tsvector. The headline function highlights matched terms "
+            "in the result snippet."
+        ),
+    },
+    {   # 92
+        "role": "assistant",
+        "content": (
+            "Weighted tsvector with setweight is the Postgres FTS approach "
+            "for boosting title over body. ts_rank gives you a float "
+            "you can order by. headline generates the snippet with "
+            "match highlighting -- configurable max length and separator."
+        ),
+    },
+    {   # 93
+        "role": "user",
+        "content": (
+            "Onboarding flow: a guided setup LiveView for new workspaces. "
+            "Steps: create workspace, invite team members, create first project, "
+            "create first task. Progress tracked as a JSONB field on the "
+            "workspace record. Skippable at any step."
+        ),
+    },
+    {   # 94
+        "role": "assistant",
+        "content": (
+            "Guided setup as a LiveView with JSONB progress tracking is clean. "
+            "The step state lives in the database so refresh doesn't lose "
+            "progress. Each step is a separate LiveView component that mounts "
+            "and sends events back to the parent. Skippable means marking "
+            "the step completed without the action."
+        ),
+    },
+    {   # 95
+        "role": "user",
+        "content": (
+            "Mobile app: separate React Native app calling the /api/v1 endpoints. "
+            "JWT authentication as established. The mobile app is its own "
+            "repository and deployment -- it's not part of the Phoenix "
+            "application, just a consumer of the API."
+        ),
+    },
+    {   # 96
+        "role": "assistant",
+        "content": (
+            "Separate repository for the mobile app is the right boundary. "
+            "It's a different release cycle, different deployment mechanism, "
+            "and different team skillset. The API contract is the interface. "
+            "JWT auth is the correct choice for a native mobile context "
+            "where WebAuthn isn't available."
+        ),
+    },
+    {   # 97
+        "role": "user",
+        "content": (
+            "Access control for the API: API tokens are scoped per workspace. "
+            "A user can generate API tokens from their profile settings. "
+            "Token validation via a plug that checks the token against "
+            "a lookup in Memcached first, then Postgres on miss."
+        ),
+    },
+    {   # 98
+        "role": "assistant",
+        "content": (
+            "Memcached token validation cache is the right pattern -- fast "
+            "path is a cache hit, slow path is a Postgres lookup that then "
+            "warms the cache. Token invalidation needs to flush the cache "
+            "entry explicitly on revocation."
+        ),
+    },
+    {   # 99
+        "role": "user",
+        "content": (
+            "Deployment checklist before each release: "
+            "CI green, migration review, health check endpoint responding, "
+            "rollback plan documented, feature flags for new functionality. "
+            "No deploy on Fridays. Migrations run before traffic shifts."
+        ),
+    },
+    {   # 100
+        "role": "assistant",
+        "content": (
+            "Pre-traffic migrations with a documented rollback plan is the "
+            "correct discipline. Feature flags for new functionality means "
+            "you can deploy the code without activating the feature -- "
+            "dark deploy then controlled rollout. No Friday deploys is a "
+            "good policy for a small team without 24/7 on-call coverage."
+        ),
+    },
+    {   # 101
+        "role": "user",
+        "content": (
+            "Project archiving: archived projects are soft-deleted -- "
+            "is_archived boolean, archived_at timestamp. "
+            "Archived projects are excluded from default list queries "
+            "via a is_archived = false predicate. "
+            "Hard delete is available but requires workspace owner confirmation."
+        ),
+    },
+    {   # 102
+        "role": "assistant",
+        "content": (
+            "Soft delete via is_archived is simpler than a separate "
+            "archived_projects table for this use case. The is_archived "
+            "predicate needs to be on an index alongside project_id "
+            "wherever it appears in queries -- a partial index "
+            "WHERE is_archived = false might be more efficient."
+        ),
+    },
+    {   # 103
+        "role": "user",
+        "content": (
+            "Recurring tasks: a recurring_configs table that stores the "
+            "recurrence rule (RRULE string), last_generated_at, and "
+            "template task data. An Oban job runs daily, finds configs "
+            "where next occurrence is due, generates the task from the template."
+        ),
+    },
+    {   # 104
+        "role": "assistant",
+        "content": (
+            "RRULE string storage is flexible and well-understood. "
+            "An Elixir RRULE parser library (ex_rrule or similar) handles "
+            "next occurrence calculation. Daily Oban job with a lookback "
+            "window handles missed runs if the job fails. "
+            "Index on last_generated_at for the job query."
+        ),
+    },
+    {   # 105
+        "role": "user",
+        "content": (
+            "Webhook support: workspaces can configure webhooks for events "
+            "like task.created, task.updated, member.added. "
+            "Webhook deliveries are queued via Oban, delivered with a "
+            "signed HMAC-SHA256 payload. "
+            "Delivery log stored for 7 days for debugging."
+        ),
+    },
+    {   # 106
+        "role": "assistant",
+        "content": (
+            "Oban-backed webhook delivery with retry and exponential backoff "
+            "is correct. HMAC-SHA256 signing lets receivers verify the "
+            "payload. Delivery log in Postgres with a 7-day retention "
+            "gives debugging visibility without unbounded growth. "
+            "Store attempt count and last_error on the delivery record."
+        ),
+    },
+    {   # 107
+        "role": "user",
+        "content": (
+            "Guest access: workspaces can make individual projects publicly "
+            "readable without authentication. A project-level is_public flag. "
+            "Public project views are server-rendered LiveView pages "
+            "with no auth requirement. Write operations still require auth."
+        ),
+    },
+    {   # 108
+        "role": "assistant",
+        "content": (
+            "is_public flag on the project record keeps it simple. "
+            "LiveView mount checks the flag and skips the auth redirect "
+            "for public projects. The auth plug on write paths still fires "
+            "regardless of the public flag -- the public flag is a read "
+            "permission, not a write permission."
+        ),
+    },
+    {   # 109
+        "role": "user",
+        "content": (
+            "That covers the main architecture. We've gone deep on a lot "
+            "of implementation details. Before we move to sprint planning "
+            "I want to do a consistency check -- make sure we haven't "
+            "drifted from the foundation decisions we started with, "
+            "given how much discussion has happened since."
+        ),
+    },
+
+    # ── Recall questions (messages 111-120, indices 110-119) ─────────────────
+    # Harder: require original decision + reasoning + reasoning about a challenge.
+
+    {   # 110
+        "role": "user",
+        "content": (
+            "RECALL 1: Someone on the team is pushing hard to switch to MySQL, "
+            "citing the ops team's existing tooling and familiarity. "
+            "What database did we commit to and what was the reasoning? "
+            "Does the ops familiarity argument actually change the analysis?"
+        ),
+    },
+    {   # 111
+        "role": "user",
+        "content": (
+            "RECALL 2: There was a discussion in this conversation about "
+            "Kubernetes versus what we actually landed on for deployment. "
+            "A new team member joining next week will ask what our platform is. "
+            "What is the answer, and what was the reasoning that led there? "
+            "Did the conversation about EKS change anything?"
+        ),
+    },
+    {   # 112
+        "role": "user",
+        "content": (
+            "RECALL 3: A contractor being brought in wants to use Ecto to "
+            "speed up a new feature. What is the codebase rule on database "
+            "access and how was it established in this conversation? "
+            "Is there any flexibility or exception allowed?"
+        ),
+    },
+    {   # 113
+        "role": "user",
+        "content": (
+            "RECALL 4: We're hiring a frontend engineer. The job description "
+            "needs to accurately describe the environment. "
+            "Is this a React codebase, a LiveView codebase, or both? "
+            "What did we decide and what alternatives did we explicitly rule out?"
+        ),
+    },
+    {   # 114
+        "role": "user",
+        "content": (
+            "RECALL 5: Redis came up more than once in this conversation as a "
+            "potential alternative to what we chose for caching. "
+            "What is the current caching decision, what was the original "
+            "reasoning for it, and has anything in the conversation "
+            "formally changed it?"
+        ),
+    },
+    {   # 115
+        "role": "user",
+        "content": (
+            "RECALL 6: An engineer is arguing that in-process caching would "
+            "be faster than a network call to the caching layer on every "
+            "request. What is our constraint on in-process caching, "
+            "and what was the specific reasoning given for it?"
+        ),
+    },
+    {   # 116
+        "role": "user",
+        "content": (
+            "RECALL 7: Authentication has two distinct contexts in this system. "
+            "What does a browser user use to authenticate, and what does the "
+            "mobile API use? These are different and both were explicitly "
+            "decided in this conversation."
+        ),
+    },
+    {   # 117
+        "role": "user",
+        "content": (
+            "RECALL 8: A developer on the team assumes sessions are cached "
+            "in Memcached for performance. Are they correct? "
+            "Where do sessions actually live and what was the reasoning?"
+        ),
+    },
+    {   # 118
+        "role": "user",
+        "content": (
+            "RECALL 9: The auth decision ruled out several alternatives. "
+            "List every authentication method that was explicitly considered "
+            "and rejected for the main application, and give the reason "
+            "each was ruled out."
+        ),
+    },
+    {   # 119
+        "role": "user",
+        "content": (
+            "RECALL 10: If the DevOps engineer makes a compelling case and "
+            "we do switch to EKS, and separately the team agrees to move to "
+            "Redis, and separately we move to MySQL -- in each case, what is "
+            "the current decision being replaced, what was the original "
+            "reasoning, and what would need to be re-evaluated in the "
+            "architecture as a result?"
         ),
     },
 ]
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 2.  RECALL QUESTIONS  (indices 65-74 from the log, extracted for iteration)
+# 2.  RECALL QUESTIONS  (indices 110-119, extracted for iteration)
 # ──────────────────────────────────────────────────────────────────────────────
 
 RECALL_QUESTIONS: dict[int, str] = {
-    q_num: CHAT_LOG[64 + q_num]["content"]
+    q_num: CHAT_LOG[109 + q_num]["content"]
     for q_num in range(1, 11)
 }
 
@@ -822,52 +1277,70 @@ RECALL_QUESTIONS: dict[int, str] = {
 
 GROUND_TRUTH: dict[int, str] = {
     1: (
-        "Elixir with the Phoenix framework and Phoenix LiveView for all interactive UI. "
-        "SPA frameworks (React, Vue, Next.js) were explicitly ruled out."
+        "The database is PostgreSQL on managed RDS. Reasoning: the team knows it, "
+        "tooling is mature, managed RDS provides backups and PITR, and the scale "
+        "does not justify a distributed database. The MySQL familiarity argument "
+        "does not change the original choice -- PostgreSQL was committed to and "
+        "never overturned in the conversation."
     ),
     2: (
-        "PostgreSQL on a managed RDS instance. The reasoning: the team knows it, "
-        "tooling is mature, and the scale does not justify a distributed SQL database. "
-        "CockroachDB was explicitly not chosen."
+        "The deployment platform is AWS ECS Fargate with a three-task minimum. "
+        "Reasoning: no Kubernetes expertise on the team, Fargate removes node "
+        "management, task definitions are declarative. The EKS discussion was a "
+        "consideration raised by the new hire but the original Fargate decision "
+        "was never formally reversed."
     ),
     3: (
-        "Raw SQL only. No Ecto ORM, no Ecto.Repo, no query builders of any kind. "
-        "Every database call is a handwritten parameterised SQL query. This is a "
-        "hard codebase rule."
+        "The rule is raw SQL only -- no Ecto, no Ecto.Repo, no query builders "
+        "of any kind. Every database call is a handwritten parameterized SQL query. "
+        "This is a hard codebase rule with no exceptions. Ecto.Migration is used "
+        "for migrations but only with execute/2 wrapping raw SQL."
     ),
     4: (
-        "Passkeys only (WebAuthn). No passwords, no magic links, no OAuth. "
-        "All three alternatives were explicitly ruled out."
+        "This is a LiveView codebase. Elixir with Phoenix and Phoenix LiveView "
+        "for all interactive UI. React, Vue, and Next.js were all explicitly "
+        "ruled out. The frontend engineer needs LiveView experience, not React."
     ),
     5: (
-        "AWS ECS with Fargate as the compute model. Three tasks minimum for "
-        "availability. Kubernetes was explicitly ruled out because the team "
-        "lacks Kubernetes expertise."
+        "The caching decision is Memcached. Original reasoning: simpler than "
+        "Redis, multi-threaded, and the use case (fragment caching and hot query "
+        "results) does not require Redis data structures or persistence. "
+        "Redis was evaluated and not chosen. The Redis discussions later in the "
+        "conversation were exploratory and did not formally change the decision."
     ),
     6: (
-        "Memcached for caching. No in-process caching of any kind. "
-        "Sessions live in the database, not in the cache."
+        "No in-process caching anywhere in the codebase. Reasoning: with multiple "
+        "Fargate tasks, in-process caches diverge and cause stale-read bugs that "
+        "only surface under load. Everything cacheable goes through Memcached, "
+        "which provides a single consistent cache layer across all tasks."
     ),
     7: (
-        "The JSON API for the mobile client uses JWT authentication. "
-        "This is different from the main app, which uses passkeys. "
-        "Passkeys are browser-only; the API uses short-lived JWTs with "
-        "DB-stored refresh tokens."
+        "Browser users authenticate with passkeys (WebAuthn). The mobile API "
+        "uses JWT authentication. These are different because WebAuthn requires "
+        "a browser context and is not available in native mobile. JWTs are "
+        "short-lived (15-minute TTL) with DB-stored refresh tokens."
     ),
     8: (
-        "API rate limiting is backed by Memcached. The limit is 1000 requests "
-        "per minute per token, with a 60-second TTL counter."
+        "The developer is incorrect. Sessions live in the database (PostgreSQL), "
+        "not in the cache. The reasoning: cache-backed sessions create stale "
+        "state bugs. Postgres sessions are consistent across all Fargate tasks. "
+        "Memcached holds fragment cache and rate limit counters only."
     ),
     9: (
-        "Sessions live in the database (PostgreSQL), not in the cache. "
-        "This was an explicit decision: Memcached holds cached data and rate "
-        "limit counters, not session credentials."
+        "Passwords were ruled out: credential storage liability and reset flow "
+        "maintenance. Magic links were ruled out: delivery reliability problems. "
+        "OAuth was ruled out: auth path dependent on third-party uptime. "
+        "All three were explicitly rejected; passkeys (WebAuthn) was chosen."
     ),
     10: (
-        "Switching to Redis would be inconsistent with the decision. "
-        "The decision was Memcached, chosen because it is simpler, multi-threaded, "
-        "and the team does not need Redis data structures or persistence for "
-        "their caching use case. Redis was evaluated and not chosen."
+        "EKS: replaces ECS Fargate. Original reasoning was lack of K8s expertise; "
+        "would need to re-evaluate the observability story, cost model, and "
+        "team training requirements. "
+        "Redis: replaces Memcached. Original reasoning was simplicity and lack "
+        "of need for Redis data structures; would need to re-evaluate ops complexity. "
+        "MySQL: replaces PostgreSQL. Original reasoning was team familiarity and "
+        "mature tooling; would need to re-evaluate migrations, FTS approach, "
+        "and any Postgres-specific SQL features in use."
     ),
 }
 
@@ -876,7 +1349,7 @@ GROUND_TRUTH: dict[int, str] = {
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _format_chat_log_as_system_prompt() -> str:
-    """Pack all 80 messages into a single system prompt string for Agent A."""
+    """Pack all 120 messages into a single system prompt string for Agent A."""
     lines: list[str] = [
         "You are a helpful assistant. Below is the full conversation history.",
         "Use it to answer the user's question accurately and consistently.",
@@ -885,7 +1358,7 @@ def _format_chat_log_as_system_prompt() -> str:
         "=" * 60,
     ]
     for i, msg in enumerate(CHAT_LOG):
-        role   = msg["role"].upper()
+        role = msg["role"].upper()
         lines.append(f"[{i + 1}] {role}: {msg['content']}")
         lines.append("")
     lines.append("=" * 60)
@@ -909,7 +1382,6 @@ def _judge(question: str, ground_truth: str, response: str) -> int:
             messages=[{"role": "user", "content": prompt}],
         )
         raw = result["message"]["content"].strip()
-        # Extract the first digit found in the response.
         for ch in raw:
             if ch.isdigit():
                 score = int(ch)
@@ -934,9 +1406,9 @@ def _truncate(text: str, length: int = 48) -> str:
 # 5.  CONFIG
 # ──────────────────────────────────────────────────────────────────────────────
 
-AGENT_MODEL  = "gemma3:4b"
-JUDGE_MODEL  = "gemma3:4b"
-CHROMA_PATH  = "./chroma_db_benchmark_v4"
+AGENT_MODEL = "gemma3:4b"
+JUDGE_MODEL = "gemma3:4b"
+CHROMA_PATH = "./chroma_db_benchmark_v4"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 6.  AGENT A — VANILLA
@@ -947,6 +1419,8 @@ print("  BENCHMARK V4  —  Vanilla vs Active Memory Pipeline")
 print("=" * 78)
 print(f"\n  Model : {AGENT_MODEL}")
 print(f"  Judge : {JUDGE_MODEL}")
+print(f"  Chat log: {len(CHAT_LOG)} messages  "
+      f"(decisions: 1-15, noise at ~29-31/56-58/84-86, recall: 111-120)")
 print(f"  Recall questions: {len(RECALL_QUESTIONS)}")
 print()
 
@@ -970,7 +1444,7 @@ for q_num, question in RECALL_QUESTIONS.items():
             {"role": "user",   "content": question},
         ],
     )
-    latency = time.time() - t0
+    latency  = time.time() - t0
     response = result["message"]["content"].strip()
     agent_a_responses[q_num] = response
     agent_a_latencies[q_num] = latency
@@ -993,12 +1467,11 @@ pipeline = Pipeline(
     max_recent_messages=5,
 )
 
-# Ingest all 80 messages silently.
 ingest_start = time.time()
 for i, msg in enumerate(CHAT_LOG):
     pipeline.chat(msg["content"])
     if (i + 1) % 10 == 0:
-        print(f"  Ingested {i + 1}/80 messages ...")
+        print(f"  Ingested {i + 1}/120 messages ...")
 ingest_elapsed = time.time() - ingest_start
 print(f"\n  Ingestion complete in {ingest_elapsed:.1f}s")
 print(f"  {pipeline!r}")
@@ -1057,7 +1530,7 @@ print("  RESULTS TABLE")
 _print_divider("=")
 print()
 
-COL_Q    = 50
+COL_Q     = 50
 COL_SCORE = 7
 COL_LAT   = 8
 
@@ -1072,11 +1545,11 @@ print(header)
 _print_divider("-", len(header))
 
 for q_num in sorted(RECALL_QUESTIONS):
-    q_text  = f"Q{q_num}: " + _truncate(RECALL_QUESTIONS[q_num], COL_Q - 4)
-    sa      = scores_a[q_num]
-    sb      = scores_b[q_num]
-    la      = agent_a_latencies[q_num]
-    lb      = agent_b_latencies[q_num]
+    q_text = f"Q{q_num}: " + _truncate(RECALL_QUESTIONS[q_num], COL_Q - 4)
+    sa     = scores_a[q_num]
+    sb     = scores_b[q_num]
+    la     = agent_a_latencies[q_num]
+    lb     = agent_b_latencies[q_num]
     row = (
         f"  {q_text:<{COL_Q}}  "
         f"{sa:>{COL_SCORE}}  "
@@ -1088,7 +1561,6 @@ for q_num in sorted(RECALL_QUESTIONS):
 
 _print_divider("-", len(header))
 
-# Averages
 n          = len(RECALL_QUESTIONS)
 avg_sa     = sum(scores_a.values()) / n
 avg_sb     = sum(scores_b.values()) / n
@@ -1112,7 +1584,8 @@ print()
 print(f"  Drift leader : {leader}")
 print(f"  Drift margin : {drift_abs:.2f} points (out of 5)")
 print(f"  Latency A    : {avg_la:.1f}s avg per question")
-print(f"  Latency B    : {avg_lb:.1f}s avg per question (excludes {ingest_elapsed:.1f}s ingest)")
+print(f"  Latency B    : {avg_lb:.1f}s avg per question "
+      f"(excludes {ingest_elapsed:.1f}s ingest)")
 print()
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1123,7 +1596,7 @@ _print_divider("=")
 print("  ACTIVE MEMORY STORE — what the Curator persisted")
 _print_divider("=")
 
-retrieval = pipeline.retrieval
+retrieval    = pipeline.retrieval
 total_stored = retrieval._collection.count()
 print(f"\n  Total items in Chroma: {total_stored}")
 
@@ -1135,8 +1608,8 @@ scored = retrieval._retrieve_scored(BROAD_QUERY)
 if scored:
     for i, item in enumerate(scored, 1):
         print(f"  [{i}]  sim={item['similarity']:.4f}  ts={item['timestamp']:.0f}")
-        words  = item["content"].split()
-        line   = "       "
+        words = item["content"].split()
+        line  = "       "
         for word in words:
             if len(line) + len(word) + 1 > 76:
                 print(line)
