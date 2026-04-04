@@ -1469,7 +1469,7 @@ pipeline = Pipeline(
 
 ingest_start = time.time()
 for i, msg in enumerate(CHAT_LOG):
-    pipeline.chat(msg["content"])
+    pipeline.chat(msg["content"], skip_observer=True)
     if (i + 1) % 10 == 0:
         print(f"  Ingested {i + 1}/120 messages ...")
 ingest_elapsed = time.time() - ingest_start
