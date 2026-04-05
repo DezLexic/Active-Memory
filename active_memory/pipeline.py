@@ -137,6 +137,35 @@ class Pipeline:
         # 6. Return response.
         return response
 
+    def ingest(self, question: str, response: str) -> None:
+        """
+        Push a pre-formed Q/A pair into the Bucket without invoking the
+        Active Agent.  Intended for batch pre-seeding from a known
+        conversation log.
+
+        The Observer and Curator still run on eviction so the rolling
+        summary and vector store are built correctly.
+
+        Parameters
+        ----------
+        question   The user turn of the pair.
+        response   The assistant turn of the pair.
+        """
+        popped = self._bucket.push_message(question, response)
+
+        if popped is not None:
+            # Observer runs synchronously so the rolling summary is fully built
+            # before the next pair is ingested.
+            self._observer.update(self._bucket, popped)
+
+            # Curator can remain async -- its Chroma writes do not affect the
+            # summary and it has ample time to finish during Phase 3 recall.
+            threading.Thread(
+                target=self._curator.evaluate,
+                args=(popped,),
+                daemon=True,
+            ).start()
+
     # ── Accessors ──────────────────────────────────────────────────────────────
 
     @property
