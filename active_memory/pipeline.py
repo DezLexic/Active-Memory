@@ -23,15 +23,23 @@ Ollama queue contention on a single-instance setup.
 Observer receives the entire evicted batch and makes exactly one LLM call
 regardless of batch size.  Curator evaluates one stable mid-stack pair via
 peek_curator_target() rather than every evicted pair.
+
+Backend configuration
+---------------------
+All three agents (ActiveAgent, Observer, Curator) share the same backend by
+default.  Pass observer_backend or curator_backend to route different roles
+to different providers or models — for example, a heavyweight cloud model for
+user-facing responses and a lightweight local model for bookkeeping tasks.
 """
 
 from __future__ import annotations
 
-from .bucket       import Bucket
-from .retrieval    import Retrieval
-from .observer     import Observer
-from .curator      import Curator
-from .active_agent import ActiveAgent
+from .bucket        import Bucket
+from .retrieval     import Retrieval
+from .observer      import Observer
+from .curator       import Curator
+from .active_agent  import ActiveAgent
+from .backends.base import LLMBackend
 
 
 class Pipeline:
@@ -40,30 +48,41 @@ class Pipeline:
 
     Parameters
     ----------
-    model                  Ollama model name passed to all agents.
-    chroma_path            Path to the local Chroma database directory.
-    max_recent_messages    Max Q/A pairs kept in the Bucket's recent stack.
-    batch_reduction        Number of pairs evicted at once when the stack is
-                           full.  Must be <= max_recent_messages.
-    system_instructions    Optional override for the Bucket's system prompt
-                           header.  Pass None to use the Bucket default.
-    observer_url           Ollama base URL for the Observer agent.
-                           Defaults to http://localhost:11434.
-    curator_url            Ollama base URL for the Curator agent.
-                           Defaults to http://localhost:11434.
+    backend             LLM backend used by all three agents unless overrides
+                        are provided.  When None, an OllamaBackend with
+                        model "gemma3:4b" and default base URL is created
+                        automatically — preserving the zero-config experience
+                        for Ollama users.
+    chroma_path         Path to the local Chroma database directory.
+    max_recent_messages Max Q/A pairs kept in the Bucket's recent stack.
+    batch_reduction     Number of pairs evicted at once when the stack is
+                        full.  Must be <= max_recent_messages.
+    system_instructions Optional override for the Bucket's system prompt
+                        header.  Pass None to use the Bucket default.
+    observer_backend    If provided, used exclusively by the Observer instead
+                        of `backend`.  Useful when summarisation should run
+                        on a different model or provider.
+    curator_backend     If provided, used exclusively by the Curator instead
+                        of `backend`.
     """
 
     def __init__(
         self,
-        model: str = "gemma3:4b",
+        backend: LLMBackend | None = None,
         chroma_path: str = "./chroma_db",
         max_recent_messages: int = 20,
         batch_reduction: int = 10,
         system_instructions: str | None = None,
-        observer_url: str = "http://localhost:11434",
-        curator_url: str = "http://localhost:11434",
+        observer_backend: LLMBackend | None = None,
+        curator_backend:  LLMBackend | None = None,
     ) -> None:
-        self._model = model
+        # Default to OllamaBackend so Pipeline() with no args still works.
+        if backend is None:
+            from .backends.ollama_backend import OllamaBackend
+            backend = OllamaBackend()
+
+        _observer_backend = observer_backend if observer_backend is not None else backend
+        _curator_backend  = curator_backend  if curator_backend  is not None else backend
 
         _CONCISE = "Be concise. Answer directly. Do not over-explain."
 
@@ -73,17 +92,16 @@ class Pipeline:
             from .bucket import _DEFAULT_SYSTEM_INSTRUCTIONS
             combined_instructions = f"{_DEFAULT_SYSTEM_INSTRUCTIONS}\n{_CONCISE}"
 
-        bucket_kwargs: dict = {
-            "max_recent": max_recent_messages,
-            "batch_reduction": batch_reduction,
-            "system_instructions": combined_instructions,
-        }
-
-        self._bucket      = Bucket(**bucket_kwargs)
-        self._retrieval   = Retrieval(chroma_path=chroma_path)
-        self._observer    = Observer(model=model, base_url=observer_url)
-        self._curator     = Curator(model=model, retrieval=self._retrieval, base_url=curator_url)
-        self._agent       = ActiveAgent(model=model)
+        self._bucket    = Bucket(
+            max_recent=max_recent_messages,
+            batch_reduction=batch_reduction,
+            system_instructions=combined_instructions,
+        )
+        self._retrieval = Retrieval(chroma_path=chroma_path)
+        self._observer  = Observer(backend=_observer_backend)
+        self._curator   = Curator(backend=_curator_backend, retrieval=self._retrieval)
+        self._agent     = ActiveAgent(backend=backend)
+        self._backend   = backend   # kept for __repr__
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -191,7 +209,7 @@ class Pipeline:
     def __repr__(self) -> str:
         return (
             f"Pipeline("
-            f"model={self._model!r}, "
+            f"backend={self._backend!r}, "
             f"bucket={self._bucket!r}, "
             f"stored={self._retrieval._collection.count()})"
         )

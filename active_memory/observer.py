@@ -7,15 +7,15 @@ evicted from the recent-messages stack.
 No model call is made unless pairs have actually been popped (popped_pairs
 is not None and non-empty), so turns that do not trigger eviction are free.
 
-One Ollama call per batch regardless of batch size.  The prompt includes
+One LLM call per batch regardless of batch size.  The prompt includes
 all evicted pairs in sequence and instructs the model to extend the existing
 summary to capture everything that was just lost.
 """
 
 from __future__ import annotations
 
-import ollama
-from .bucket import Bucket
+from .bucket        import Bucket
+from .backends.base import LLMBackend
 
 
 class Observer:
@@ -24,22 +24,18 @@ class Observer:
 
     Parameters
     ----------
-    model       Ollama model name used for summarisation.
+    backend     Any LLMBackend-conforming object.
     max_words   Soft target word count passed to the model as a guide.
                 Keeps the summary from growing unboundedly.
-    base_url    Base URL of the Ollama instance to use.
-                Defaults to http://localhost:11434.
     """
 
     def __init__(
         self,
-        model: str = "gemma3:4b",
+        backend: LLMBackend,
         max_words: int = 600,
-        base_url: str = "http://localhost:11434",
     ) -> None:
-        self._model     = model
+        self._backend   = backend
         self._max_words = max_words
-        self._client    = ollama.Client(host=base_url)
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -87,19 +83,13 @@ class Observer:
             f"Return only the updated summary with no preamble or commentary."
         )
 
-        result = self._client.chat(
-            model=self._model,
-            messages=[{"role": "user", "content": prompt}],
-        )
-
-        updated_summary = result["message"]["content"].strip()
+        updated_summary = self._backend.chat([{"role": "user", "content": prompt}])
         bucket.set_summary(updated_summary)
 
     # ── Dunder helpers ─────────────────────────────────────────────────────────
 
     def __repr__(self) -> str:
         return (
-            f"Observer(model={self._model!r}, "
-            f"max_words={self._max_words}, "
-            f"host={str(self._client._client.base_url)!r})"
+            f"Observer(backend={self._backend!r}, "
+            f"max_words={self._max_words})"
         )

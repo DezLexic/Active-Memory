@@ -8,7 +8,7 @@ It does not touch the memory store.  It does not update the summary.  It
 does not evaluate what to remember.  All of that happens before or after
 this call.  The Agent only reads from the Bucket.
 
-One Ollama call per turn.
+One LLM call per turn via the injected backend.
 
     system message  ->  bucket.to_context_string()
     user message    ->  bucket.current_prompt
@@ -16,8 +16,9 @@ One Ollama call per turn.
 
 from __future__ import annotations
 
-import ollama
-from .bucket import Bucket
+from .bucket        import Bucket
+from .backends.base import LLMBackend
+
 
 class ActiveAgent:
     """
@@ -25,11 +26,12 @@ class ActiveAgent:
 
     Parameters
     ----------
-    model   Ollama model name used for response generation.
+    backend     Any LLMBackend-conforming object.  Responsible for the
+                provider-specific call and returns a plain response string.
     """
 
-    def __init__(self, model: str = "gemma3:4b") -> None:
-        self._model = model
+    def __init__(self, backend: LLMBackend) -> None:
+        self._backend = backend
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -38,7 +40,7 @@ class ActiveAgent:
         Generate a response from the assembled Bucket.
 
         Assembles the full context string from the Bucket and sends it as
-        the system prompt.  Sends bucket.current_prompt as the user message.
+        the system message.  Sends bucket.current_prompt as the user message.
         Returns the model's response as a plain string.
 
         Parameters
@@ -47,19 +49,14 @@ class ActiveAgent:
                 messages, memories, current_prompt) should be populated
                 before calling this method.
         """
-        context = bucket.to_context_string()
-
-        result = ollama.chat(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": context},
-                {"role": "user",   "content": bucket.current_prompt},
-            ],
-        )
-
-        return result["message"]["content"].strip()
+        context  = bucket.to_context_string()
+        messages = [
+            {"role": "system", "content": context},
+            {"role": "user",   "content": bucket.current_prompt},
+        ]
+        return self._backend.chat(messages)
 
     # ── Dunder helpers ─────────────────────────────────────────────────────────
 
     def __repr__(self) -> str:
-        return f"ActiveAgent(model={self._model!r})"
+        return f"ActiveAgent(backend={self._backend!r})"

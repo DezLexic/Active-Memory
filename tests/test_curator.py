@@ -15,6 +15,7 @@ os.environ["OLLAMA_KEEP_ALIVE"] = "10m"
 import shutil
 from active_memory.retrieval import Retrieval
 from active_memory.curator   import Curator
+from active_memory.backends  import OllamaBackend
 
 STORE_PATH = "./chroma_store_test_curator"
 shutil.rmtree(STORE_PATH, ignore_errors=True)
@@ -26,7 +27,7 @@ retrieval = Retrieval(
 )
 
 curator = Curator(
-    model="gemma3:4b",
+    backend=OllamaBackend(model="gemma3:4b"),
     retrieval=retrieval,
 )
 
@@ -111,7 +112,7 @@ for entry in pairs:
     curator._last_store  = None
     curator._last_reason = None
 
-    curator.evaluate(pair, summary=summary)
+    curator.evaluate(pair)
 
     store  = curator._last_store
     reason = curator._last_reason

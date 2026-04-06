@@ -24,13 +24,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 os.environ["OLLAMA_KEEP_ALIVE"] = "10m"
 
-import threading
-from active_memory import Pipeline
+from active_memory         import Pipeline
+from active_memory.backends import OllamaBackend
 
 # ── Pipeline setup ────────────────────────────────────────────────────────────
 
 pipeline = Pipeline(
-    model="gemma3:4b",
+    backend=OllamaBackend(model="gemma3:4b"),
     chroma_path="./chroma_db_test_pipeline",
     max_recent_messages=5,
 )
@@ -54,17 +54,6 @@ TURNS = [
     "And what was the database decision, including the query policy we agreed to?",
 ]
 
-# Capture spawned daemon threads so we can join the last pair before printing
-# final state.
-_spawned: list[threading.Thread] = []
-_original_start = threading.Thread.start
-
-def _patched_start(self):
-    _spawned.append(self)
-    _original_start(self)
-
-threading.Thread.start = _patched_start
-
 for i, message in enumerate(TURNS, 1):
     print(f"  Turn {i:02d}")
     print(f"  USER:  {message}")
@@ -78,16 +67,6 @@ for i, message in enumerate(TURNS, 1):
         f"summary={'set' if b.summary else 'empty'}]"
     )
     print()
-
-threading.Thread.start = _original_start
-
-# ── Wait for the last round of background threads ─────────────────────────────
-
-if _spawned:
-    print("  Waiting for background threads to finish...")
-    for t in _spawned[-2:]:
-        t.join(timeout=60)
-    print("  Background threads done.\n")
 
 # ── Final state ───────────────────────────────────────────────────────────────
 
@@ -126,7 +105,7 @@ if scored:
             print(line)
         print()
 else:
-    print("  (nothing stored yet -- Curator threads may still be running)\n")
+    print("  (nothing stored yet)\n")
 
 print("=" * 60)
 print(f"  Done.  {pipeline!r}")
