@@ -1,15 +1,15 @@
 """
 observer.py
 
-Updates the Bucket's rolling summary whenever a message pair is evicted
-from the recent-messages stack.
+Updates the Bucket's rolling summary whenever a batch of message pairs is
+evicted from the recent-messages stack.
 
-No model call is made unless a pair has actually been popped (popped_pair
-is not None), so turns that do not trigger eviction are free.
+No model call is made unless pairs have actually been popped (popped_pairs
+is not None and non-empty), so turns that do not trigger eviction are free.
 
-One Ollama call per eviction.  The prompt instructs the model to extend
-the existing summary to capture what was just lost, preserving any
-decisions, preferences, constraints, or directions mentioned in the pair.
+One Ollama call per batch regardless of batch size.  The prompt includes
+all evicted pairs in sequence and instructs the model to extend the existing
+summary to capture everything that was just lost.
 """
 
 from __future__ import annotations
@@ -43,36 +43,45 @@ class Observer:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def update(self, bucket: Bucket, popped_pair: dict[str, str] | None) -> None:
+    def update(
+        self,
+        bucket: Bucket,
+        popped_pairs: list[dict[str, str]] | None,
+    ) -> None:
         """
-        Update the Bucket's summary to reflect a recently evicted Q/A pair.
+        Update the Bucket's summary to reflect a batch of evicted Q/A pairs.
 
-        If popped_pair is None the stack was not yet full and nothing was
-        lost, so this method returns immediately without making any calls.
+        If popped_pairs is None or empty the stack was not yet full and
+        nothing was lost, so this method returns immediately without making
+        any calls.  When a batch is provided all pairs are folded into a
+        single prompt and exactly one LLM call is made regardless of batch
+        size.
 
         Parameters
         ----------
-        bucket      The shared Bucket whose summary will be updated.
-        popped_pair The dict returned by bucket.push_message() when it
-                    evicts an old pair: {"question": str, "response": str}.
-                    Pass None (or the raw return value) when no eviction
-                    occurred.
+        bucket       The shared Bucket whose summary will be updated.
+        popped_pairs The list returned by bucket.push_message() when it
+                     evicts a batch of old pairs.  Each element is a dict
+                     with keys "question" and "response".  Pass None (or
+                     the raw return value) when no eviction occurred.
         """
-        if popped_pair is None:
+        if not popped_pairs:
             return
 
         current_summary = bucket.summary.strip() or "(no summary yet)"
-        question        = popped_pair["question"].strip()
-        response        = popped_pair["response"].strip()
+
+        pairs_text = "\n\n".join(
+            f"Q: {p['question'].strip()}\nA: {p['response'].strip()}"
+            for p in popped_pairs
+        )
 
         prompt = (
             f"You are maintaining a rolling summary of a conversation.\n\n"
             f"CURRENT SUMMARY:\n{current_summary}\n\n"
-            f"MESSAGE PAIR BEING REMOVED FROM RECENT HISTORY:\n"
-            f"Q: {question}\n"
-            f"A: {response}\n\n"
-            f"Update the summary to incorporate the information in that message "
-            f"pair so nothing important is lost. Preserve all decisions, "
+            f"MESSAGE PAIRS BEING REMOVED FROM RECENT HISTORY:\n"
+            f"{pairs_text}\n\n"
+            f"Update the summary to incorporate the information in those message "
+            f"pairs so nothing important is lost. Preserve all decisions, "
             f"preferences, constraints, and directions that have been stated. "
             f"Keep the summary under {self._max_words} words. "
             f"Return only the updated summary with no preamble or commentary."

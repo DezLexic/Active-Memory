@@ -47,10 +47,12 @@ class Curator:
         model: str = "gemma3:4b",
         retrieval: Retrieval | None = None,
         base_url: str = "http://localhost:11434",
+        use_batch_mode: bool = True,
     ) -> None:
-        self._model     = model
-        self._retrieval = retrieval
-        self._client    = ollama.Client(host=base_url)
+        self._model        = model
+        self._retrieval    = retrieval
+        self._client       = ollama.Client(host=base_url)
+        self.use_batch_mode = use_batch_mode   # public — Pipeline reads it
 
     # ── Public API ─────────────────────────────────────────────────────────────
 

@@ -12,20 +12,20 @@ Sequence on every chat() call
 2. retrieval.update_bucket(bucket, user_message)   -- inject relevant memories
 3. active_agent.respond(bucket)                    -- the only call user waits for
 4. bucket.push_message(user_message, response)     -- advance the recent stack
-5a. If a pair was popped -> Observer runs in a background daemon thread
-5b. If a pair was popped -> Curator runs in a background daemon thread
+5a. If a batch was evicted -> Observer receives the full batch list (one LLM call)
+5b. If a batch was evicted -> Curator evaluates the pair returned by
+    bucket.peek_curator_target() (one LLM call for a mid-stack stable pair)
 6. Return response string
 
-Observer and Curator both receive only the popped pair.  The Curator
-evaluates the pair on its own and stores it if it contains an explicit
-decision, hard constraint, or established preference.
+Both Observer and Curator calls are sequential (no daemon threads) to avoid
+Ollama queue contention on a single-instance setup.
 
-Both background threads are daemon threads so they never block program exit.
+Observer receives the entire evicted batch and makes exactly one LLM call
+regardless of batch size.  Curator evaluates one stable mid-stack pair via
+peek_curator_target() rather than every evicted pair.
 """
 
 from __future__ import annotations
-
-import threading
 
 from .bucket       import Bucket
 from .retrieval    import Retrieval
@@ -43,6 +43,8 @@ class Pipeline:
     model                  Ollama model name passed to all agents.
     chroma_path            Path to the local Chroma database directory.
     max_recent_messages    Max Q/A pairs kept in the Bucket's recent stack.
+    batch_reduction        Number of pairs evicted at once when the stack is
+                           full.  Must be <= max_recent_messages.
     system_instructions    Optional override for the Bucket's system prompt
                            header.  Pass None to use the Bucket default.
     observer_url           Ollama base URL for the Observer agent.
@@ -55,7 +57,8 @@ class Pipeline:
         self,
         model: str = "gemma3:4b",
         chroma_path: str = "./chroma_db",
-        max_recent_messages: int = 5,
+        max_recent_messages: int = 20,
+        batch_reduction: int = 10,
         system_instructions: str | None = None,
         observer_url: str = "http://localhost:11434",
         curator_url: str = "http://localhost:11434",
@@ -72,6 +75,7 @@ class Pipeline:
 
         bucket_kwargs: dict = {
             "max_recent": max_recent_messages,
+            "batch_reduction": batch_reduction,
             "system_instructions": combined_instructions,
         }
 
@@ -93,9 +97,13 @@ class Pipeline:
         2. Retrieve relevant memories and inject them into the Bucket.
         3. Get the agent's response (the only step the user waits for).
         4. Push the completed pair onto the Bucket's recent stack; capture
-           any evicted pair.
-        5. If a pair was evicted, launch Curator as a background daemon thread.
-           Also launch Observer unless skip_observer is True.
+           any evicted batch.
+        5. If a batch was evicted:
+           - Run Observer with the full batch list (one LLM call) unless
+             skip_observer is True.
+           - If use_batch_mode is True, call peek_curator_target() and pass
+             the result to Curator (one LLM call for the mid-stack pair).
+             Otherwise fall back to evaluating each evicted pair in sequence.
         6. Return the response string.
 
         Parameters
@@ -119,20 +127,18 @@ class Pipeline:
         # 4. Advance the recent stack.
         popped = bucket.push_message(user_message, response)
 
-        # 5. Background memory work — only when a pair was evicted.
+        # 5. Sequential memory work — only when a batch was evicted.
         if popped is not None:
             if not skip_observer:
-                threading.Thread(
-                    target=self._observer.update,
-                    args=(bucket, popped),
-                    daemon=True,
-                ).start()
+                self._observer.update(bucket, popped)
 
-            threading.Thread(
-                target=self._curator.evaluate,
-                args=(popped,),
-                daemon=True,
-            ).start()
+            if self._curator.use_batch_mode:
+                peeked = bucket.peek_curator_target()
+                if peeked is not None:
+                    self._curator.evaluate(peeked)
+            else:
+                for pair in popped:
+                    self._curator.evaluate(pair)
 
         # 6. Return response.
         return response
@@ -154,17 +160,19 @@ class Pipeline:
         popped = self._bucket.push_message(question, response)
 
         if popped is not None:
-            # Observer runs synchronously so the rolling summary is fully built
-            # before the next pair is ingested.
+            # Observer runs synchronously so the rolling summary is fully
+            # built before the next pair is ingested.
             self._observer.update(self._bucket, popped)
 
-            # Curator can remain async -- its Chroma writes do not affect the
-            # summary and it has ample time to finish during Phase 3 recall.
-            threading.Thread(
-                target=self._curator.evaluate,
-                args=(popped,),
-                daemon=True,
-            ).start()
+            # Curator evaluates the stable mid-stack pair rather than all
+            # evicted pairs.
+            if self._curator.use_batch_mode:
+                peeked = self._bucket.peek_curator_target()
+                if peeked is not None:
+                    self._curator.evaluate(peeked)
+            else:
+                for pair in popped:
+                    self._curator.evaluate(pair)
 
     # ── Accessors ──────────────────────────────────────────────────────────────
 
