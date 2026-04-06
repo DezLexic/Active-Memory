@@ -1,2 +1,7 @@
+# Core dependencies (always required)
 ollama
 chromadb
+
+# Optional provider backends — install whichever you need:
+#   pip install anthropic        # for AnthropicBackend
+#   pip install huggingface_hub  # for HuggingFaceBackend

@@ -17,6 +17,7 @@ os.environ["OLLAMA_KEEP_ALIVE"] = "10m"
 
 from active_memory.bucket       import Bucket
 from active_memory.active_agent import ActiveAgent
+from active_memory.backends     import OllamaBackend
 
 bucket = Bucket(max_recent=5)
 
@@ -53,7 +54,7 @@ bucket.set_current_prompt(
     "Can you remind me of the database we chose and whether we are using an ORM?"
 )
 
-agent = ActiveAgent(model="gemma3:4b")
+agent = ActiveAgent(backend=OllamaBackend(model="gemma3:4b"))
 
 print("=" * 60)
 print(f"  {agent!r}")

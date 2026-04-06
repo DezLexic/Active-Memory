@@ -2,8 +2,8 @@
 curator.py
 
 Evaluates an evicted message pair and stores it in Chroma if it is worth
-remembering.  Runs in the background after the Active Agent responds --
-the user never waits for it.
+remembering.  Runs after the Active Agent responds -- the user never waits
+for it.
 
 The Curator receives only the popped pair -- no summary, no external context.
 The prompt is direct: does this exchange contain an explicit decision, hard
@@ -24,34 +24,33 @@ from __future__ import annotations
 
 import json
 import time
-import ollama
 
-from .retrieval import Retrieval
+from .retrieval     import Retrieval
+from .backends.base import LLMBackend
 
 
 class Curator:
     """
-    Background agent that decides whether an evicted Q/A pair is worth
-    persisting to the vector store.
+    Agent that decides whether an evicted Q/A pair is worth persisting to
+    the vector store.
 
     Parameters
     ----------
-    model       Ollama model name used for evaluation.
-    retrieval   A Retrieval instance that owns the Chroma collection.
-    base_url    Base URL of the Ollama instance to use.
-                Defaults to http://localhost:11434.
+    backend         Any LLMBackend-conforming object.
+    retrieval       A Retrieval instance that owns the Chroma collection.
+    use_batch_mode  When True, Pipeline passes the single pair returned by
+                    bucket.peek_curator_target() rather than every evicted
+                    pair.  Default True.
     """
 
     def __init__(
         self,
-        model: str = "gemma3:4b",
+        backend: LLMBackend,
         retrieval: Retrieval | None = None,
-        base_url: str = "http://localhost:11434",
         use_batch_mode: bool = True,
     ) -> None:
-        self._model        = model
+        self._backend      = backend
         self._retrieval    = retrieval
-        self._client       = ollama.Client(host=base_url)
         self.use_batch_mode = use_batch_mode   # public — Pipeline reads it
 
     # ── Public API ─────────────────────────────────────────────────────────────
@@ -63,8 +62,8 @@ class Curator:
         Steps
         -----
         1. Build a prompt from the pair alone.
-        2. Make one Ollama call to judge whether the pair contains an
-           explicit decision, hard constraint, or established preference.
+        2. Make one LLM call to judge whether the pair contains an explicit
+           decision, hard constraint, or established preference.
         3. Parse the JSON response.
         4. If store is true, write to Chroma via retrieval.store().
 
@@ -92,13 +91,9 @@ class Curator:
         )
 
         try:
-            result   = self._client.chat(
-                model=self._model,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            raw_text = result["message"]["content"].strip()
+            raw_text = self._backend.chat([{"role": "user", "content": prompt}])
         except Exception as exc:
-            print(f"[Curator] Ollama call failed: {exc}")
+            print(f"[Curator] LLM call failed: {exc}")
             return
 
         try:
@@ -132,7 +127,4 @@ class Curator:
     # ── Dunder helpers ─────────────────────────────────────────────────────────
 
     def __repr__(self) -> str:
-        return (
-            f"Curator(model={self._model!r}, "
-            f"host={str(self._client._client.base_url)!r})"
-        )
+        return f"Curator(backend={self._backend!r})"
