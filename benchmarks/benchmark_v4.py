@@ -102,7 +102,7 @@ CHROMA_PATH  = "./chroma_db_benchmark_v4"
 # Curator calls never queue behind Observer calls.
 AGENT_URL    = "http://localhost:11434"   # Active Agent (implicit, not passed to Pipeline)
 OBSERVER_URL = "http://localhost:11434"   # Observer  — synchronous during ingest
-CURATOR_URL  = "http://localhost:11435"   # Curator   — async daemon, parallel to Observer
+CURATOR_URL  = "http://localhost:11434"   # Curator   — async daemon, parallel to Observer
 
 # Context size:
 #   None  -> full conversation (~108 pairs, ~18K tokens for Agent A)
@@ -172,7 +172,6 @@ if os.path.exists(CHROMA_PATH):
 pipeline = Pipeline(
     model=AGENT_MODEL,
     chroma_path=CHROMA_PATH,
-    max_recent_messages=5,
     observer_url=OBSERVER_URL,
     curator_url=CURATOR_URL,
 )
@@ -243,7 +242,7 @@ agent_b_latencies: dict[int, float] = {}
 for q_num, question in ctx.recall_questions.items():
     print(f"  Q{q_num}: {_truncate(question, 60)}")
     t0 = time.time()
-    response = pipeline.chat(question)
+    response = pipeline.chat(question, skip_observer=True)
     latency  = time.time() - t0
     agent_b_responses[q_num] = response
     agent_b_latencies[q_num] = latency

@@ -19,7 +19,6 @@ from __future__ import annotations
 import ollama
 from .bucket import Bucket
 
-
 class ActiveAgent:
     """
     Conversational agent that reads the assembled Bucket and responds.

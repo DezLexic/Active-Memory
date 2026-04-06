@@ -35,10 +35,12 @@ class Bucket:
 
     def __init__(
         self,
-        max_recent: int = 5,
+        max_recent: int = 20,
+        batch_reduction: int = 10,
         system_instructions: str = _DEFAULT_SYSTEM_INSTRUCTIONS,
     ) -> None:
         self._max_recent: int          = max_recent
+        self._batch_reduction: int     = batch_reduction
         self._max_memories: int        = 3
         self.system_instructions: str  = system_instructions
         self.summary: str              = ""
@@ -48,20 +50,37 @@ class Bucket:
 
     # ── Mutators ──────────────────────────────────────────────────────────────
 
-    def push_message(self, question: str, response: str) -> dict[str, str] | None:
+    def push_message(
+        self, question: str, response: str
+    ) -> list[dict[str, str]] | None:
         """
         Append a completed Q/A pair to recent_messages.
 
-        If the stack is already at max capacity the oldest pair is evicted
-        before the new one is appended.  The evicted pair is returned so the
-        caller can forward it to the Observer and Curator for memory
-        consideration.  Returns None when no eviction was necessary.
+        When the stack reaches max capacity, batch_reduction pairs are evicted
+        from the front all at once and returned as a list.  The new pair is
+        then appended.  Returns None when the stack was not yet full and no
+        eviction was necessary.
         """
-        evicted: dict[str, str] | None = None
+        evicted: list[dict[str, str]] | None = None
         if len(self.recent_messages) >= self._max_recent:
-            evicted = self.recent_messages.pop(0)
+            evicted = self.recent_messages[: self._batch_reduction]
+            self.recent_messages = self.recent_messages[self._batch_reduction :]
         self.recent_messages.append({"question": question, "response": response})
         return evicted
+
+    def peek_curator_target(self) -> dict[str, str] | None:
+        """
+        Return the pair at index (max_recent - batch_reduction) in the recent
+        stack without removing it.
+
+        This is the pair old enough to have surrounding context but not yet
+        part of an eviction batch — a stable, mid-stack candidate for Curator
+        evaluation.  Returns None if the stack has not reached that depth yet.
+        """
+        target_idx = self._max_recent - self._batch_reduction
+        if len(self.recent_messages) > target_idx:
+            return self.recent_messages[target_idx]
+        return None
 
     def set_summary(self, summary: str) -> None:
         """Replace the conversation summary (called by the Observer)."""
@@ -158,6 +177,7 @@ class Bucket:
         return (
             f"Bucket("
             f"recent={len(self.recent_messages)}/{self._max_recent}, "
+            f"batch_reduction={self._batch_reduction}, "
             f"memories={len(self.memories)}/{self._max_memories}, "
             f"summary={'set' if self.summary else 'empty'}, "
             f"prompt={'set' if self.current_prompt else 'empty'})"
