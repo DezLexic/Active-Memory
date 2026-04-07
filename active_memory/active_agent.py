@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from .bucket        import Bucket
 from .backends.base import LLMBackend
+from .monitor       import ProcessMonitor
 
 
 class ActiveAgent:
@@ -54,7 +55,9 @@ class ActiveAgent:
             {"role": "system", "content": context},
             {"role": "user",   "content": bucket.current_prompt},
         ]
-        return self._backend.chat(messages)
+        with ProcessMonitor("agent responding"):
+            response = self._backend.chat(messages)
+        return response
 
     # ── Dunder helpers ─────────────────────────────────────────────────────────
 

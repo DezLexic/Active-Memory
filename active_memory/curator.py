@@ -27,6 +27,7 @@ import time
 
 from .retrieval     import Retrieval
 from .backends.base import LLMBackend
+from .monitor       import ProcessMonitor
 
 
 class Curator:
@@ -97,7 +98,8 @@ class Curator:
         )
 
         try:
-            raw_text = self._backend.chat([{"role": "user", "content": prompt}])
+            with ProcessMonitor("curator evaluating pair"):
+                raw_text = self._backend.chat([{"role": "user", "content": prompt}])
         except Exception as exc:
             print(f"[Curator] LLM call failed: {exc}")
             return
