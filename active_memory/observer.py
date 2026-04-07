@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from .bucket        import Bucket
 from .backends.base import LLMBackend
+from .monitor       import ProcessMonitor
 
 
 class Observer:
@@ -83,7 +84,8 @@ class Observer:
             f"Return only the updated summary with no preamble or commentary."
         )
 
-        updated_summary = self._backend.chat([{"role": "user", "content": prompt}])
+        with ProcessMonitor("observer writing summary"):
+            updated_summary = self._backend.chat([{"role": "user", "content": prompt}])
         bucket.set_summary(updated_summary)
 
     # ── Dunder helpers ─────────────────────────────────────────────────────────
