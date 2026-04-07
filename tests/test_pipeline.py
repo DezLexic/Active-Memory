@@ -24,14 +24,19 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 os.environ["OLLAMA_KEEP_ALIVE"] = "10m"
 
+import shutil
+
 from active_memory         import Pipeline
 from active_memory.backends import OllamaBackend
 
 # ── Pipeline setup ────────────────────────────────────────────────────────────
 
+STORE_PATH = "./chroma_db_test_pipeline"
+shutil.rmtree(STORE_PATH, ignore_errors=True)
+
 pipeline = Pipeline(
     backend=OllamaBackend(model="gemma3:4b"),
-    chroma_path="./chroma_db_test_pipeline",
+    chroma_path=STORE_PATH,
     max_recent_messages=5,
 )
 
