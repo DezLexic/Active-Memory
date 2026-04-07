@@ -1,30 +1,20 @@
 """
 test_retrieval.py
 
-Stores six memories with timestamps spread across a fake timeline, then runs
-a semantically focused query and prints full scored results so threshold
-filtering and recency weighting are both visible.
+Exercises the two-tier Retrieval class: warm_memories and cold_memories.
 
-Memory topics
--------------
-  1. Elixir/Phoenix framework choice       (oldest)
-  2. CockroachDB database decision         (older)
-  3. Redis Cluster caching decision        (middle)
-  4. Magic-link authentication decision    (recent)
-  5. Database indexing strategy            (more recent)   <- should score high
-  6. Weekly meal prep / cooking notes      (newest)        <- should be filtered out
-
-Query: "what database and indexing decisions did we make?"
-
-Expected behaviour
-------------------
-- Memories 2 and 5 should score highest (directly about databases/indexing).
-- Memory 3 may score moderately (infrastructure, not directly database).
-- Memory 1 may score low (language, not database).
-- Memory 4 may score low (auth, not database).
-- Memory 6 should fall below the threshold and be filtered out entirely.
-- When two memories have similar similarity scores, the more recent timestamp
-  (memory 5 > memory 2) should rank first.
+Test plan
+---------
+  1. Store 5 warm memories  (active decisions and constraints)
+  2. Store 3 cold memories  (background context, older info)
+  3. Verify collection counts (warm=5, cold=3)
+  4. Run a query — confirm warm results surface first, cold fills remaining
+  5. Run the same query again — confirm retrieval_count incremented for
+     each returned memory
+  6. move_to_cold — move one warm memory to cold; verify counts shift
+  7. move_to_warm — move one cold memory to warm; verify counts shift
+  8. get_all_metadata — print all memories from both tiers with metadata
+  9. Final retrieval showing tier labels and current retrieval_counts
 """
 
 import sys
@@ -36,7 +26,7 @@ import time
 from active_memory.retrieval import Retrieval
 from active_memory.bucket    import Bucket
 
-# ── Use a temporary store so each test run starts clean ──────────────────────
+# ── Use a fresh store for every run ──────────────────────────────────────────
 
 STORE_PATH = "./chroma_store_test_retrieval"
 shutil.rmtree(STORE_PATH, ignore_errors=True)
@@ -44,114 +34,284 @@ shutil.rmtree(STORE_PATH, ignore_errors=True)
 retrieval = Retrieval(
     chroma_path=STORE_PATH,
     similarity_threshold=0.3,
-    max_results=3,
+    max_results=4,
 )
 
-# ── Fake timeline ─────────────────────────────────────────────────────────────
+# ── Fake timeline (Unix timestamps spread over ~10 days) ─────────────────────
 
 DAY  = 86_400
 BASE = 1_700_000_000
 
 T = {
-    "oldest":      BASE + 0 * DAY,
-    "older":       BASE + 1 * DAY,
-    "middle":      BASE + 2 * DAY,
-    "recent":      BASE + 3 * DAY,
-    "more_recent": BASE + 4 * DAY,
-    "newest":      BASE + 5 * DAY,
+    "day0": BASE + 0 * DAY,
+    "day1": BASE + 1 * DAY,
+    "day2": BASE + 2 * DAY,
+    "day3": BASE + 3 * DAY,
+    "day4": BASE + 4 * DAY,
+    "day5": BASE + 5 * DAY,
+    "day6": BASE + 6 * DAY,
+    "day7": BASE + 7 * DAY,
 }
 
-memories = [
+# ── 1. Store warm memories (active decisions) ─────────────────────────────────
+
+print("=" * 68)
+print("  1. Storing warm memories (active decisions / constraints)")
+print("=" * 68)
+
+warm_ids: list[str] = []
+
+warm_memories = [
     (
         "Decision: use Elixir with the Phoenix framework. "
         "Chosen for BEAM concurrency, OTP fault tolerance, and LiveView "
         "for real-time UI without a JavaScript SPA.",
-        T["oldest"],
+        T["day5"],
     ),
     (
         "Decision: CockroachDB as the primary database. "
         "Distributed by default, PostgreSQL-wire-compatible. "
-        "Raw SQL only — no Ecto ORM, no query builders.",
-        T["older"],
-    ),
-    (
-        "Decision: Redis Cluster for all caching. "
-        "No in-process caching — divergent pod caches cause stale-read bugs. "
-        "Redis provides a shared cache layer across all Kubernetes replicas.",
-        T["middle"],
+        "Raw SQL only -- no Ecto ORM, no query builders anywhere in the codebase.",
+        T["day6"],
     ),
     (
         "Decision: magic-link authentication only. "
-        "No passwords, no OAuth. Single-use tokens stored in Redis with a 15-minute TTL. "
-        "Removes credential storage liability entirely.",
-        T["recent"],
+        "No passwords, no OAuth. Single-use tokens stored in Redis with "
+        "a 15-minute TTL. Removes credential storage liability entirely.",
+        T["day6"],
     ),
     (
-        "Database indexing strategy: add a composite index on (user_id, created_at) "
-        "for the products table. Use (created_at, id) as the cursor for pagination. "
-        "All indexes defined in raw SQL migration files.",
-        T["more_recent"],
+        "Constraint: minimum three GKE replicas at all times. "
+        "Horizontal pod autoscaler is configured but the floor is three.",
+        T["day7"],
     ),
     (
-        "Weekly meal prep notes: roasted a full tray of vegetables, "
-        "made a large batch of lentil soup, and portioned out lunches for the week. "
-        "Added more chilli flakes this time.",
-        T["newest"],
+        "Constraint: Redis Cluster for all caching. "
+        "No in-process caching -- divergent pod caches cause stale-read bugs.",
+        T["day7"],
     ),
 ]
 
-# ── Store all six memories ────────────────────────────────────────────────────
+for content, ts in warm_memories:
+    mid = retrieval.store(content, ts, tier="warm")
+    warm_ids.append(mid)
+    print(f"  [warm]  [{mid[:8]}...]  \"{content[:55].rstrip()}...\"")
 
-print("=" * 66)
-print("  Storing memories")
-print("=" * 66)
-for content, ts in memories:
-    memory_id = retrieval.store(content, ts)
-    preview   = content[:55].rstrip() + "..."
-    print(f"  [{memory_id[:8]}...]  ts={ts}  \"{preview}\"")
+print(f"\n  warm collection: {retrieval._warm.count()}  cold collection: {retrieval._cold.count()}")
 
-print(f"\n  Total stored: {retrieval._collection.count()}")
-print(f"  {retrieval!r}\n")
+# ── 2. Store cold memories (background / older context) ───────────────────────
 
-# ── Run the query ─────────────────────────────────────────────────────────────
+print()
+print("=" * 68)
+print("  2. Storing cold memories (background context)")
+print("=" * 68)
 
-QUERY = "what database and indexing decisions did we make?"
-print("=" * 66)
+cold_ids: list[str] = []
+
+cold_memories = [
+    (
+        "Project background: we are building a SaaS product for team "
+        "collaboration. Expected initial user base is small-to-medium teams "
+        "in the 10-200 seat range.",
+        T["day0"],
+    ),
+    (
+        "Early tech exploration: evaluated Elixir, Go, and Rust as primary "
+        "language candidates. Elixir was preferred for its concurrency model "
+        "and the existing team familiarity with functional programming.",
+        T["day1"],
+    ),
+    (
+        "Architecture discussion: considered monolith vs microservices. "
+        "Agreed to start with a monolith and extract services only when "
+        "a clear bottleneck justifies the split.",
+        T["day2"],
+    ),
+]
+
+for content, ts in cold_memories:
+    mid = retrieval.store(content, ts, tier="cold")
+    cold_ids.append(mid)
+    print(f"  [cold]  [{mid[:8]}...]  \"{content[:55].rstrip()}...\"")
+
+print(f"\n  warm collection: {retrieval._warm.count()}  cold collection: {retrieval._cold.count()}")
+print(f"  Total via _collection.count(): {retrieval._collection.count()}")
+assert retrieval._warm.count() == 5, "Expected 5 warm memories"
+assert retrieval._cold.count() == 3, "Expected 3 cold memories"
+print("  [PASS] counts correct (warm=5, cold=3)")
+
+# ── 3. First retrieval — warm first, cold fills remaining ─────────────────────
+
+QUERY = "what database and SQL decisions did we make?"
+
+print()
+print("=" * 68)
+print(f"  3. First retrieval  (max_results={retrieval._max})")
 print(f"  Query: \"{QUERY}\"")
-print(f"  Threshold: {retrieval._threshold}")
-print(f"  max_results: {retrieval._max}")
-print("=" * 66)
+print("=" * 68)
 
-scored = retrieval._retrieve_scored(QUERY)
+results_pass1 = retrieval._retrieve_scored(QUERY)
 
-raw = retrieval._collection.query(
-    query_texts=[QUERY],
-    n_results=retrieval._collection.count(),
-    include=["documents", "distances", "metadatas"],
-)
+print(f"\n  {len(results_pass1)} result(s) before count increment:\n")
+for i, item in enumerate(results_pass1, 1):
+    print(
+        f"  [{i}]  tier={item['tier']:<4}  "
+        f"sim={item['similarity']:.4f}  "
+        f"count={item['retrieval_count']}  "
+        f"\"{item['content'][:50].rstrip()}...\""
+    )
 
-print("\n  -- All candidates (before threshold filter) --\n")
-all_candidates = []
-for doc, dist, meta in zip(
-    raw["documents"][0], raw["distances"][0], raw["metadatas"][0]
-):
-    sim = 1.0 - dist
-    all_candidates.append((sim, float(meta.get("timestamp", 0)), doc))
+# Actually call retrieve() to trigger count increments.
+_ = retrieval.retrieve(QUERY)
+print(f"\n  retrieve() called — retrieval_counts should now be 1 for returned items.")
 
-all_candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+# ── 4. Second retrieval — counts should have incremented ─────────────────────
 
-for sim, ts, doc in all_candidates:
-    passed = "PASS" if sim >= retrieval._threshold else "FAIL"
-    print(f"  [{passed}]  sim={sim:.4f}  ts={ts:.0f}  \"{doc[:55].rstrip()}...\"")
+print()
+print("=" * 68)
+print(f"  4. Second retrieval — verify retrieval_count incremented")
+print("=" * 68)
 
-print(f"\n  -- Results returned by retrieve() (top {retrieval._max} after filter) --\n")
-if scored:
-    for i, item in enumerate(scored, 1):
-        print(f"  [{i}]  sim={item['similarity']:.4f}  ts={item['timestamp']:.0f}")
+results_pass2 = retrieval._retrieve_scored(QUERY)
+
+print(f"\n  {len(results_pass2)} result(s) — counts after first retrieve():\n")
+all_incremented = True
+for i, item in enumerate(results_pass2, 1):
+    count = item["retrieval_count"]
+    ok = count >= 1
+    if not ok:
+        all_incremented = False
+    tag = "OK" if ok else "FAIL -- expected >= 1"
+    print(
+        f"  [{i}]  tier={item['tier']:<4}  "
+        f"sim={item['similarity']:.4f}  "
+        f"count={count}  [{tag}]  "
+        f"\"{item['content'][:45].rstrip()}...\""
+    )
+
+assert all_incremented, "Some retrieval_counts did not increment"
+print("\n  [PASS] all returned memories have retrieval_count >= 1")
+
+# ── 5. move_to_cold — move a warm memory to cold ─────────────────────────────
+
+target_warm_id = warm_ids[0]  # Elixir/Phoenix decision
+
+print()
+print("=" * 68)
+print("  5. move_to_cold")
+print(f"  Moving warm memory [{target_warm_id[:8]}...] to cold")
+print("=" * 68)
+
+warm_before = retrieval._warm.count()
+cold_before = retrieval._cold.count()
+
+retrieval.move_to_cold(target_warm_id)
+
+warm_after = retrieval._warm.count()
+cold_after = retrieval._cold.count()
+
+print(f"\n  Before: warm={warm_before}  cold={cold_before}")
+print(f"  After:  warm={warm_after}  cold={cold_after}")
+assert warm_after == warm_before - 1, "Warm count should decrease by 1"
+assert cold_after == cold_before + 1, "Cold count should increase by 1"
+
+# Verify it's actually in cold now.
+data = retrieval._cold.get(ids=[target_warm_id], include=["metadatas"])
+assert data["ids"], "Memory should be present in cold collection"
+assert data["metadatas"][0]["tier"] == "cold", "Tier metadata should be 'cold'"
+print("  [PASS] memory moved to cold with tier='cold'")
+
+# Verify it's gone from warm.
+data_warm = retrieval._warm.get(ids=[target_warm_id])
+assert not data_warm["ids"], "Memory should be absent from warm collection"
+print("  [PASS] memory absent from warm collection")
+
+# ── 6. move_to_warm — move a cold memory to warm ─────────────────────────────
+
+target_cold_id = cold_ids[0]  # Project background
+
+print()
+print("=" * 68)
+print("  6. move_to_warm")
+print(f"  Moving cold memory [{target_cold_id[:8]}...] to warm")
+print("=" * 68)
+
+warm_before = retrieval._warm.count()
+cold_before = retrieval._cold.count()
+
+retrieval.move_to_warm(target_cold_id)
+
+warm_after = retrieval._warm.count()
+cold_after = retrieval._cold.count()
+
+print(f"\n  Before: warm={warm_before}  cold={cold_before}")
+print(f"  After:  warm={warm_after}  cold={cold_after}")
+assert warm_after == warm_before + 1, "Warm count should increase by 1"
+assert cold_after == cold_before - 1, "Cold count should decrease by 1"
+
+# Verify tier metadata updated.
+data = retrieval._warm.get(ids=[target_cold_id], include=["metadatas"])
+assert data["ids"], "Memory should be present in warm collection"
+assert data["metadatas"][0]["tier"] == "warm", "Tier metadata should be 'warm'"
+print("  [PASS] memory moved to warm with tier='warm'")
+
+# Verify absent from cold.
+data_cold = retrieval._cold.get(ids=[target_cold_id])
+assert not data_cold["ids"], "Memory should be absent from cold collection"
+print("  [PASS] memory absent from cold collection")
+
+# ── 7. get_all_metadata ───────────────────────────────────────────────────────
+
+print()
+print("=" * 68)
+print("  7. get_all_metadata() — all memories from both collections")
+print("=" * 68)
+
+all_meta = retrieval.get_all_metadata()
+
+print(f"\n  Total memories: {len(all_meta)}")
+print(f"  Expected: {retrieval._warm.count() + retrieval._cold.count()}\n")
+assert len(all_meta) == retrieval._warm.count() + retrieval._cold.count()
+
+# Group by tier for display.
+by_tier: dict[str, list] = {"warm": [], "cold": []}
+for entry in all_meta:
+    by_tier[entry["tier"]].append(entry)
+
+for tier in ("warm", "cold"):
+    print(f"  -- {tier.upper()} ({len(by_tier[tier])} memories) --")
+    for entry in by_tier[tier]:
+        print(
+            f"    [{entry['id'][:8]}...]  "
+            f"count={entry['retrieval_count']}  "
+            f"ts={entry['timestamp'][:19]}  "
+            f"\"{entry['content'][:45].rstrip()}...\""
+        )
+    print()
+
+print("  [PASS] get_all_metadata returned correct total")
+
+# ── 8. Final retrieval — show tier labels in results ─────────────────────────
+
+FINAL_QUERY = "technology stack decisions and constraints"
+
+print("=" * 68)
+print(f"  8. Final retrieval")
+print(f"  Query: \"{FINAL_QUERY}\"")
+print("=" * 68)
+
+final_scored = retrieval._retrieve_scored(FINAL_QUERY)
+
+print(f"\n  {len(final_scored)} result(s) (max={retrieval._max}):\n")
+if final_scored:
+    for i, item in enumerate(final_scored, 1):
+        print(f"  [{i}]  tier={item['tier']:<4}  "
+              f"sim={item['similarity']:.4f}  "
+              f"count={item['retrieval_count']}")
         words = item["content"].split()
         line  = "       "
         for word in words:
-            if len(line) + len(word) + 1 > 66:
+            if len(line) + len(word) + 1 > 68:
                 print(line)
                 line = "       " + word
             else:
@@ -162,22 +322,6 @@ if scored:
 else:
     print("  (no results passed the threshold)")
 
-# ── Also exercise update_bucket ───────────────────────────────────────────────
-
-print("=" * 66)
-print("  update_bucket() — inject results into a live Bucket")
-print("=" * 66)
-
-bucket = Bucket()
-bucket.set_current_prompt(QUERY)
-retrieval.update_bucket(bucket, QUERY)
-
-print(f"\n  Bucket memories slot now holds {len(bucket.memories)} item(s):")
-for i, mem in enumerate(bucket.memories, 1):
-    print(f"\n  [{i}] {mem[:80].rstrip()}...")
-
-print("\n\n  -- Bucket context string (memories section only) --\n")
-ctx   = bucket.to_context_string()
-start = ctx.find("RELEVANT MEMORIES")
-end   = ctx.find("\n\n=", start)
-print(ctx[start: end if end != -1 else len(ctx)])
+print("=" * 68)
+print(f"  Done.  {retrieval!r}")
+print("=" * 68)

@@ -1,6 +1,7 @@
 # Core dependencies (always required)
 ollama
 chromadb
+python-dotenv
 
 # Optional provider backends — install whichever you need:
 #   pip install anthropic        # for AnthropicBackend

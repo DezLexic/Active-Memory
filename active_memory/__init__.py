@@ -37,6 +37,7 @@ Provider examples
 
 from .pipeline import Pipeline
 from .backends import LLMBackend, OllamaBackend, AnthropicBackend, HuggingFaceBackend
+from .config   import backend_from_env
 
 __all__ = [
     "Pipeline",
@@ -44,4 +45,5 @@ __all__ = [
     "OllamaBackend",
     "AnthropicBackend",
     "HuggingFaceBackend",
+    "backend_from_env",
 ]
