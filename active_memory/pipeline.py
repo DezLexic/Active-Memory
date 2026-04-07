@@ -76,10 +76,11 @@ class Pipeline:
         observer_backend: LLMBackend | None = None,
         curator_backend:  LLMBackend | None = None,
     ) -> None:
-        # Default to OllamaBackend so Pipeline() with no args still works.
+        # Default to backend_from_env() so Pipeline() with no args reads .env.
+        # Falls back to OllamaBackend("gemma3:4b") when no .env is present.
         if backend is None:
-            from .backends.ollama_backend import OllamaBackend
-            backend = OllamaBackend()
+            from .config import backend_from_env
+            backend = backend_from_env()
 
         _observer_backend = observer_backend if observer_backend is not None else backend
         _curator_backend  = curator_backend  if curator_backend  is not None else backend

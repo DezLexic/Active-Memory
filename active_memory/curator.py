@@ -84,9 +84,15 @@ class Curator:
             "decision, a hard constraint, or an established preference.\n"
             "If the content is ambiguous or seems incomplete without additional "
             "context, do not store it. Be conservative -- when in doubt, drop it.\n\n"
-            "Respond with a JSON object containing exactly two fields:\n"
+            "Also decide which tier this memory belongs in.\n"
+            "Warm is for recent decisions, active constraints, and preferences "
+            "likely needed soon.\n"
+            "Cold is for older context, background information, and decisions "
+            "unlikely to be revisited soon.\n\n"
+            "Respond with a JSON object containing exactly three fields:\n"
             "  store  : boolean\n"
-            "  reason : one sentence\n\n"
+            "  reason : one sentence\n"
+            "  tier   : \"warm\" or \"cold\"\n\n"
             "Respond with only the JSON object. No preamble, no commentary."
         )
 
@@ -112,17 +118,21 @@ class Curator:
 
             store  = bool(parsed.get("store", False))
             reason = str(parsed.get("reason", ""))
+            tier   = str(parsed.get("tier", "warm")).lower().strip()
+            if tier not in ("warm", "cold"):
+                tier = "warm"
         except (json.JSONDecodeError, KeyError, IndexError) as exc:
             print(f"[Curator] JSON parse error: {exc}  raw={raw_text!r}")
             return
 
         if store and self._retrieval is not None:
             timestamp = float(time.time())
-            self._retrieval.store(combined, timestamp)
+            self._retrieval.store(combined, timestamp, tier=tier)
 
         # Surface the decision for callers / test scripts that want visibility.
         self._last_store  = store
         self._last_reason = reason
+        self._last_tier   = tier if store else None
 
     # ── Dunder helpers ─────────────────────────────────────────────────────────
 

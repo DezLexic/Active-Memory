@@ -2,7 +2,10 @@ __pycache__/
 *.pyc
 chroma_store/
 chroma_store_*/
+chroma_db/
+chroma_db_*/
 .claude/
+.env
 
 # Old root-level source files superseded by package structure
 /active_agent.py
