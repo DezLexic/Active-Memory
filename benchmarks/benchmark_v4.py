@@ -43,6 +43,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
 from active_memory import Pipeline
+from active_memory.backends import OllamaBackend
 from contexts.architecture_v4 import ArchitectureContext
 
 
@@ -170,10 +171,10 @@ if os.path.exists(CHROMA_PATH):
     shutil.rmtree(CHROMA_PATH)
 
 pipeline = Pipeline(
-    model=AGENT_MODEL,
+    backend=OllamaBackend(model=AGENT_MODEL, base_url=AGENT_URL),
     chroma_path=CHROMA_PATH,
-    observer_url=OBSERVER_URL,
-    curator_url=CURATOR_URL,
+    observer_backend=OllamaBackend(model=AGENT_MODEL, base_url=OBSERVER_URL),
+    curator_backend=OllamaBackend(model=AGENT_MODEL, base_url=CURATOR_URL),
 )
 
 _PAIR_COUNT = ctx.pair_count
@@ -361,7 +362,7 @@ scored = retrieval._retrieve_scored(BROAD_QUERY)
 
 if scored:
     for i, item in enumerate(scored, 1):
-        print(f"  [{i}]  sim={item['similarity']:.4f}  ts={item['timestamp']:.0f}")
+        print(f"  [{i}]  sim={item['similarity']:.4f}  tier={item.get('tier', '?'):<4}  ts={item['timestamp'][:19]}")
         words = item["content"].split()
         line  = "       "
         for word in words:
@@ -374,7 +375,7 @@ if scored:
             print(line)
         print()
 else:
-    print("  (no results above threshold -- Curator threads may still be running)")
+    print("  (no results above threshold)")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 10.  FINAL BUCKET SUMMARY
