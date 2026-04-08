@@ -7,6 +7,10 @@ Uses the configured LLM backend (reads .env via backend_from_env).
 Large counts are split into batches so the model is never asked to produce
 thousands of tokens in one call.  Each batch logs its progress to stdout.
 
+Each batch call runs in a daemon thread so Ctrl+C is always responsive and
+a configurable per-batch timeout aborts a hung call cleanly.  Completed
+batches are saved to disk immediately, so a partial run is never lost.
+
 Usage
 -----
     # Defaults: 75 pairs, write to benchmarks/contexts/niah_chat_75.py
@@ -21,6 +25,9 @@ Usage
     # Smaller batches if your model truncates at 50 pairs
     python benchmarks/generate_chat.py --pairs 1000 --batch-size 25
 
+    # Longer timeout for slow hardware (seconds per batch, default 300)
+    python benchmarks/generate_chat.py --pairs 1000 --timeout 600
+
     # Custom output file
     python benchmarks/generate_chat.py --pairs 50 --output benchmarks/contexts/my_chat.py
 
@@ -28,6 +35,8 @@ Arguments
 ---------
     --pairs       Number of user/assistant pairs to generate. Default 75.
     --batch-size  Pairs per LLM call. Default 50. Lower if model truncates.
+    --timeout     Seconds to wait per batch before aborting. Default 300.
+    --retries     Times to retry a timed-out batch before giving up. Default 1.
     --output      Output file path. Default: benchmarks/contexts/niah_chat_<N>.py
     --passkey     Optional passkey string to inject as a needle in the haystack.
     --position    Where to inject the passkey (0.0 = start, 1.0 = end). Default 0.5.
@@ -39,6 +48,7 @@ import argparse
 import re
 import sys
 import os
+import threading
 
 # Allow running from the project root without installing the package.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -147,6 +157,48 @@ def _merge_chunks(chunks: list[str]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Timeout-safe backend call
+# ---------------------------------------------------------------------------
+
+def _chat_with_timeout(backend, messages: list[dict], timeout_secs: int) -> str:
+    """
+    Call backend.chat() in a daemon thread so the main thread stays
+    interruptible by Ctrl+C and a timeout can be enforced.
+
+    Raises TimeoutError if the call doesn't complete within timeout_secs.
+    Re-raises any exception thrown by the backend.
+    """
+    result: list[str | None] = [None]
+    error:  list[BaseException | None] = [None]
+
+    def _call() -> None:
+        try:
+            result[0] = backend.chat(messages)
+        except Exception as exc:  # noqa: BLE001
+            error[0] = exc
+
+    thread = threading.Thread(target=_call, daemon=True)
+    thread.start()
+
+    try:
+        thread.join(timeout=timeout_secs)
+    except KeyboardInterrupt:
+        # Re-raise so the caller's KeyboardInterrupt handler fires.
+        raise
+
+    if thread.is_alive():
+        raise TimeoutError(
+            f"Batch timed out after {timeout_secs}s. "
+            "Ollama may be overloaded. Try --timeout 600 or restart Ollama."
+        )
+
+    if error[0] is not None:
+        raise error[0]  # type: ignore[misc]
+
+    return result[0]  # type: ignore[return-value]
+
+
+# ---------------------------------------------------------------------------
 # Passkey injection
 # ---------------------------------------------------------------------------
 
@@ -195,6 +247,39 @@ def _validate(filepath: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Partial save
+# ---------------------------------------------------------------------------
+
+def _save(output_file: str, batches: list[str], num_pairs: int, batch_size: int,
+          passkey: str | None, passkey_position: float, partial: bool = False) -> None:
+    """Write whatever batches exist to disk. Marks the file as partial if incomplete."""
+    raw_output = _merge_chunks(batches)
+
+    if passkey and not partial:
+        print(f"Injecting passkey at position {passkey_position:.0%}...")
+        raw_output = _inject_passkey(raw_output, passkey, passkey_position)
+
+    os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
+
+    with open(output_file, "w", encoding="utf-8") as f:
+        if partial:
+            f.write("# PARTIAL — generation was interrupted before completion\n")
+        else:
+            f.write("# Auto-generated chat log for NIAH stress test\n")
+        f.write(f"# Pairs: {num_pairs} | Batch size: {batch_size}\n")
+        if passkey and not partial:
+            f.write(f"# Passkey: '{passkey}' | Position: {passkey_position:.0%}\n")
+        f.write("\n")
+        f.write("CHAT_LOG = ")
+        f.write(raw_output)
+        f.write("\n")
+
+    label = "Partial file" if partial else "Written"
+    print(f"{label} → {output_file}")
+    _validate(output_file)
+
+
+# ---------------------------------------------------------------------------
 # Main generation function
 # ---------------------------------------------------------------------------
 
@@ -204,6 +289,8 @@ def generate_chat_log(
     passkey: str | None,
     passkey_position: float,
     batch_size: int = 50,
+    timeout_secs: int = 300,
+    retries: int = 1,
 ) -> None:
     from active_memory.config import backend_from_env
 
@@ -212,53 +299,66 @@ def generate_chat_log(
 
     total_batches = (num_pairs + batch_size - 1) // batch_size
     print(f"Generating {num_pairs} pairs in {total_batches} batch(es) of up to {batch_size}...")
+    print(f"Per-batch timeout: {timeout_secs}s  |  Retries: {retries}  |  Press Ctrl+C to abort and save progress.\n")
 
-    batches: list[str] = []
-    pairs_done = 0
+    batches:    list[str] = []
+    pairs_done: int       = 0
 
-    for batch_num in range(1, total_batches + 1):
-        this_batch = min(batch_size, num_pairs - pairs_done)
+    try:
+        for batch_num in range(1, total_batches + 1):
+            this_batch = min(batch_size, num_pairs - pairs_done)
 
-        if batch_num == 1:
-            prompt = _build_prompt(this_batch)
+            if batch_num == 1:
+                prompt = _build_prompt(this_batch)
+            else:
+                last_msgs = _extract_last_messages(batches[-1])
+                prompt    = _build_continuation_prompt(this_batch, pairs_done * 2, last_msgs)
+
+            msg_start = pairs_done * 2
+            msg_end   = (pairs_done + this_batch) * 2 - 1
+            print(
+                f"  [batch {batch_num}/{total_batches}] generating {this_batch} pairs "
+                f"(messages {msg_start}–{msg_end})...",
+                end=" ",
+                flush=True,
+            )
+
+            chunk = None
+            for attempt in range(retries + 1):
+                try:
+                    chunk = _chat_with_timeout(
+                        backend,
+                        [{"role": "user", "content": prompt}],
+                        timeout_secs,
+                    )
+                    break  # success
+                except TimeoutError as exc:
+                    if attempt < retries:
+                        print(f"\n  TIMEOUT — retrying ({attempt + 1}/{retries})...", end=" ", flush=True)
+                    else:
+                        print(f"\n  TIMEOUT — no more retries.")
+                        print(f"  {exc}")
+                        if batches:
+                            print(f"\nSaving {pairs_done} completed pairs before exiting...")
+                            _save(output_file, batches, num_pairs, batch_size,
+                                  passkey, passkey_position, partial=True)
+                        sys.exit(1)
+
+            batches.append(chunk)
+            pairs_done += this_batch
+            print(f"done  ({pairs_done}/{num_pairs} pairs complete)")
+
+    except KeyboardInterrupt:
+        print("\n\nInterrupted by user.")
+        if batches:
+            print(f"Saving {pairs_done} completed pairs...")
+            _save(output_file, batches, num_pairs, batch_size,
+                  passkey, passkey_position, partial=True)
         else:
-            last_msgs = _extract_last_messages(batches[-1])
-            prompt    = _build_continuation_prompt(this_batch, pairs_done * 2, last_msgs)
+            print("No batches completed — nothing to save.")
+        sys.exit(0)
 
-        msg_start = pairs_done * 2
-        msg_end   = (pairs_done + this_batch) * 2 - 1
-        print(
-            f"  [batch {batch_num}/{total_batches}] generating {this_batch} pairs "
-            f"(messages {msg_start}–{msg_end})...",
-            end=" ",
-            flush=True,
-        )
-
-        chunk = backend.chat([{"role": "user", "content": prompt}]).strip()
-        batches.append(chunk)
-        pairs_done += this_batch
-        print(f"done  ({pairs_done}/{num_pairs} pairs complete)")
-
-    raw_output = _merge_chunks(batches)
-
-    if passkey:
-        print(f"Injecting passkey at position {passkey_position:.0%}...")
-        raw_output = _inject_passkey(raw_output, passkey, passkey_position)
-
-    os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
-
-    with open(output_file, "w", encoding="utf-8") as f:
-        f.write("# Auto-generated chat log for NIAH stress test\n")
-        f.write(f"# Pairs: {num_pairs} | Batch size: {batch_size}\n")
-        if passkey:
-            f.write(f"# Passkey: '{passkey}' | Position: {passkey_position:.0%}\n")
-        f.write("\n")
-        f.write("CHAT_LOG = ")
-        f.write(raw_output)
-        f.write("\n")
-
-    print(f"Written to {output_file}")
-    _validate(output_file)
+    _save(output_file, batches, num_pairs, batch_size, passkey, passkey_position, partial=False)
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +380,18 @@ def main() -> None:
         type=int,
         default=50,
         help="Pairs per LLM call. Default: 50. Lower if model truncates output.",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=300,
+        help="Seconds to wait per batch before aborting. Default: 300.",
+    )
+    parser.add_argument(
+        "--retries",
+        type=int,
+        default=1,
+        help="Times to retry a timed-out batch before giving up. Default: 1.",
     )
     parser.add_argument(
         "--output", "-o",
@@ -315,6 +427,8 @@ def main() -> None:
         passkey=args.passkey,
         passkey_position=args.position,
         batch_size=args.batch_size,
+        timeout_secs=args.timeout,
+        retries=args.retries,
     )
 
 
