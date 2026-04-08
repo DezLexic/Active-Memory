@@ -156,6 +156,23 @@ def _merge_chunks(chunks: list[str]) -> str:
     return "[\n" + ",\n".join(inner_parts) + "\n]"
 
 
+def _clean_chunk(raw: str) -> str:
+    """
+    Strip markdown code fences and any explanatory preamble/postamble.
+    Returns just the '[...]' list content.
+
+    Models often wrap output in ```python ... ``` despite being told not to.
+    """
+    # Remove ``` fences with or without a language tag (```python, ```py, etc.)
+    raw = re.sub(r'```[a-z]*\n?', '', raw).strip()
+    # Extract from first '[' to last ']' to discard any stray leading/trailing text
+    start = raw.find('[')
+    end   = raw.rfind(']')
+    if start != -1 and end != -1 and end > start:
+        return raw[start:end + 1]
+    return raw
+
+
 # ---------------------------------------------------------------------------
 # Timeout-safe backend call
 # ---------------------------------------------------------------------------
@@ -331,6 +348,7 @@ def generate_chat_log(
                         [{"role": "user", "content": prompt}],
                         timeout_secs,
                     )
+                    chunk = _clean_chunk(chunk)
                     break  # success
                 except TimeoutError as exc:
                     if attempt < retries:
