@@ -156,15 +156,36 @@ def _merge_chunks(chunks: list[str]) -> str:
     return "[\n" + ",\n".join(inner_parts) + "\n]"
 
 
+_QUOTE_MAP = str.maketrans({
+    '\u201c': '"',   # "  left double quotation mark
+    '\u201d': '"',   # "  right double quotation mark
+    '\u201e': '"',   # „  double low-9 quotation mark
+    '\u2033': '"',   # ″  double prime
+    '\u2018': "'",   # '  left single quotation mark
+    '\u2019': "'",   # '  right single quotation mark
+    '\u201b': "'",   # ‛  single high-reversed-9 quotation mark
+    '\u2032': "'",   # ′  prime
+})
+
+
+def _normalize_quotes(text: str) -> str:
+    """Replace Unicode smart/curly quotes with straight ASCII equivalents."""
+    return text.translate(_QUOTE_MAP)
+
+
 def _clean_chunk(raw: str) -> str:
     """
-    Strip markdown code fences and any explanatory preamble/postamble.
-    Returns just the '[...]' list content.
+    Strip markdown code fences, normalize smart quotes, and discard any
+    explanatory preamble/postamble.  Returns just the '[...]' list content.
 
-    Models often wrap output in ```python ... ``` despite being told not to.
+    Models often wrap output in ```python ... ``` and emit Unicode curly
+    quotes despite being told not to.
     """
     # Remove ``` fences with or without a language tag (```python, ```py, etc.)
     raw = re.sub(r'```[a-z]*\n?', '', raw).strip()
+    # Replace curly/smart quotes with straight ASCII equivalents so the
+    # generated Python file is valid and parseable.
+    raw = _normalize_quotes(raw)
     # Extract from first '[' to last ']' to discard any stray leading/trailing text
     start = raw.find('[')
     end   = raw.rfind(']')
