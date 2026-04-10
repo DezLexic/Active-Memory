@@ -3,9 +3,6 @@ pipeline.py
 
 Orchestration layer that wires all components together.
 
-Not an agent — a plain Python class that controls the exact sequence of
-operations on every exchange.  The outside world calls one method: chat().
-
 Sequence on every chat() call
 ------------------------------
 1. bucket.set_current_prompt(user_message)
@@ -23,6 +20,17 @@ Ollama queue contention on a single-instance setup.
 Observer receives the entire evicted batch and makes exactly one LLM call
 regardless of batch size.  Curator evaluates one stable mid-stack pair via
 peek_curator_target() rather than every evicted pair.
+
+Steps 1–2 and steps 4–5 are also exposed as public methods (build_context /
+update) so developers can insert their own model call between context
+preparation and memory maintenance:
+
+    context  = pipeline.build_context(user_message)   # steps 1–2
+    response = my_client.chat(context)                 # developer's own call
+    pipeline.update(user_message, response)            # steps 4–5
+
+chat() is a thin wrapper around these three steps and remains fully
+backwards-compatible.
 
 Backend configuration
 ---------------------
@@ -106,31 +114,25 @@ class Pipeline:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def chat(self, user_message: str, skip_observer: bool = False) -> str:
+    def build_context(self, user_message: str) -> list[dict[str, str]]:
         """
-        Run the full pipeline for one user exchange.
+        Prepare the Bucket for a new user turn and return the assembled
+        messages list ready to be passed to any LLM client.
 
         Steps
         -----
         1. Set the current prompt on the Bucket.
         2. Retrieve relevant memories and inject them into the Bucket.
-        3. Get the agent's response (the only step the user waits for).
-        4. Push the completed pair onto the Bucket's recent stack; capture
-           any evicted batch.
-        5. If a batch was evicted:
-           - Run Observer with the full batch list (one LLM call) unless
-             skip_observer is True.
-           - If use_batch_mode is True, call peek_curator_target() and pass
-             the result to Curator (one LLM call for the mid-stack pair).
-             Otherwise fall back to evaluating each evicted pair in sequence.
-        6. Return the response string.
+        3. Assemble and return the messages list:
+               [{"role": "system", "content": <context string>},
+                {"role": "user",   "content": <user_message>}]
+
+        This is the first half of a chat() turn.  Call update() with the
+        response afterwards to complete memory maintenance.
 
         Parameters
         ----------
         user_message    The raw message from the user.
-        skip_observer   When True, the Observer is not run on evicted pairs.
-                        Useful during batch ingestion where summary updates
-                        are not needed and the cost is not justified.
         """
         bucket = self._bucket
 
@@ -140,8 +142,40 @@ class Pipeline:
         # 2. Inject memories.
         self._retrieval.update_bucket(bucket, user_message)
 
-        # 3. Respond (user waits for this).
-        response = self._agent.respond(bucket)
+        # 3. Assemble messages list (same format ActiveAgent.respond() uses).
+        return [
+            {"role": "system", "content": bucket.to_context_string()},
+            {"role": "user",   "content": bucket.current_prompt},
+        ]
+
+    def update(self, user_message: str, response: str, skip_observer: bool = False) -> None:
+        """
+        Advance the Bucket's recent stack and run memory maintenance.
+
+        This is the second half of a chat() turn.  Call it after receiving
+        a response — whether from pipeline.chat(), your own model call, or
+        any other source.
+
+        Steps
+        -----
+        4. Push the completed pair onto the Bucket's recent stack; capture
+           any evicted batch.
+        5. If a batch was evicted:
+           - Run Observer with the full batch list (one LLM call) unless
+             skip_observer is True.
+           - If use_batch_mode is True, call peek_curator_target() and pass
+             the result to Curator (one LLM call for the mid-stack pair).
+             Otherwise fall back to evaluating each evicted pair in sequence.
+
+        Parameters
+        ----------
+        user_message    The original user message for this turn.
+        response        The assistant response to store.
+        skip_observer   When True, the Observer is not run on evicted pairs.
+                        Useful during batch ingestion where summary updates
+                        are not needed and the cost is not justified.
+        """
+        bucket = self._bucket
 
         # 4. Advance the recent stack.
         popped = bucket.push_message(user_message, response)
@@ -159,7 +193,23 @@ class Pipeline:
                 for pair in popped:
                     self._curator.evaluate(pair)
 
-        # 6. Return response.
+    def chat(self, user_message: str, skip_observer: bool = False) -> str:
+        """
+        Run the full pipeline for one user exchange.
+
+        Thin wrapper around build_context(), ActiveAgent.respond(), and
+        update().  Behaviour is identical to before the refactor.
+
+        Parameters
+        ----------
+        user_message    The raw message from the user.
+        skip_observer   When True, the Observer is not run on evicted pairs.
+                        Useful during batch ingestion where summary updates
+                        are not needed and the cost is not justified.
+        """
+        self.build_context(user_message)
+        response = self._agent.respond(self._bucket)
+        self.update(user_message, response, skip_observer=skip_observer)
         return response
 
     def ingest(self, question: str, response: str) -> None:
