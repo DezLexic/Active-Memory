@@ -308,6 +308,9 @@ def _save(output_file: str, batches: list[str], num_pairs: int, batch_size: int,
         if passkey and not partial:
             f.write(f"# Passkey: '{passkey}' | Position: {passkey_position:.0%}\n")
         f.write("\n")
+        if passkey and not partial:
+            f.write(f'PASSKEY = "{passkey}"\n')
+            f.write("\n")
         f.write("CHAT_LOG = ")
         f.write(raw_output)
         f.write("\n")

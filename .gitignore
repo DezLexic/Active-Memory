@@ -35,3 +35,6 @@ chroma_db_*/
 /benchmark_v2.py
 /benchmark_v3.py
 /chroma_db_test_pipeline/
+
+# Generated NIAH chat logs (large data files — regenerate with generate_chat.py)
+benchmarks/contexts/niah_chat_*.py
