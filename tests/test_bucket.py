@@ -50,9 +50,10 @@ print("=" * 60)
 for i, (question, response) in enumerate(messages, 1):
     evicted = bucket.push_message(question, response)
     if evicted is not None:
-        print(f"\n  -- Pair {i}: EVICTION TRIGGERED --")
-        print(f"  Popped  Q: {evicted['question']}")
-        print(f"  Popped  A: {evicted['response']}")
+        print(f"\n  -- Pair {i}: EVICTION TRIGGERED ({len(evicted)} pair(s)) --")
+        for popped in evicted:
+            print(f"  Popped  Q: {popped['question']}")
+            print(f"  Popped  A: {popped['response']}")
         print(f"  Pushed  Q: {question}")
         print(f"  Pushed  A: {response}")
     else:
