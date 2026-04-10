@@ -38,6 +38,7 @@ pipeline = Pipeline(
     backend=OllamaBackend(model="gemma3:4b"),
     chroma_path=STORE_PATH,
     max_recent_messages=5,
+    batch_reduction=2,   # must be <= max_recent_messages
 )
 
 print("=" * 60)
