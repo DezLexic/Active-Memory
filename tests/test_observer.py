@@ -10,6 +10,7 @@ is clearly visible.
 
 import sys
 import os
+import json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 os.environ["OLLAMA_KEEP_ALIVE"] = "10m"
@@ -20,7 +21,7 @@ from active_memory.backends  import OllamaBackend
 
 # max_recent=5, batch_reduction=2 — evicts 2 pairs at once when full
 bucket   = Bucket(max_recent=5, batch_reduction=2)
-observer = Observer(backend=OllamaBackend(model="gemma3:4b"), max_words=300)
+observer = Observer(backend=OllamaBackend(model="gemma3:4b"), max_summary_length=150)
 
 print("=" * 60)
 print(f"  {observer!r}")
@@ -83,11 +84,10 @@ for i, (question, response) in enumerate(messages, 1):
 
         observer.update(bucket, evicted)
 
-        print(f"\n  Updated summary ({len(bucket.summary.split())} words):")
-        print(f"  {'-' * 56}")
-        for line in bucket.summary.splitlines():
-            print(f"  {line}")
-        print(f"  {'-' * 56}")
+        print(f"\n  Topic tree ({len(bucket.topic_tree.get('topics', []))} topics):")
+        print(json.dumps(bucket.topic_tree, indent=2))
+        print(f"\n  Flattened summary:")
+        print(bucket.get_summary_text())
     else:
         print(f"\n  Turn {i}: pushed  (stack {len(bucket.recent_messages)}/{bucket._max_recent} -- no eviction)")
         print(f"  Q: {question}")

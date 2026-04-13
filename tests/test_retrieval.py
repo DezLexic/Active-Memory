@@ -146,7 +146,7 @@ QUERY = "what database and SQL decisions did we make?"
 
 print()
 print("=" * 68)
-print(f"  3. First retrieval  (max_results={retrieval._max})")
+print(f"  3. First retrieval  (threshold={retrieval._threshold})")
 print(f"  Query: \"{QUERY}\"")
 print("=" * 68)
 
@@ -302,7 +302,7 @@ print("=" * 68)
 
 final_scored = retrieval._retrieve_scored(FINAL_QUERY)
 
-print(f"\n  {len(final_scored)} result(s) (max={retrieval._max}):\n")
+print(f"\n  {len(final_scored)} result(s):\n")
 if final_scored:
     for i, item in enumerate(final_scored, 1):
         print(f"  [{i}]  tier={item['tier']:<4}  "

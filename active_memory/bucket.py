@@ -10,6 +10,8 @@ No model calls.  No external dependencies.  Standard library only.
 
 from __future__ import annotations
 
+import time
+
 _DEFAULT_SYSTEM_INSTRUCTIONS = (
     "You are a helpful assistant.\n"
     "Retrieved memories shown below are approximate reconstructions drawn from "
@@ -28,7 +30,7 @@ class Bucket:
     -----
     summary             Rolling summary of the conversation so far (set by Observer).
     recent_messages     Fixed-size stack of the most recent Q/A pairs.
-    memories            Up to 3 retrieved memory strings (set by retrieval layer).
+    memories            Retrieved memory dicts with metadata (set by retrieval layer).
     system_instructions Static instructions prepended to every context string.
     current_prompt      The user message currently being answered.
     """
@@ -41,11 +43,11 @@ class Bucket:
     ) -> None:
         self._max_recent: int          = max_recent
         self._batch_reduction: int     = batch_reduction
-        self._max_memories: int        = 3
         self.system_instructions: str  = system_instructions
-        self.summary: str              = ""
+        self.topic_tree: dict          = {"topics": []}
+        self._turn_count: int          = 0
         self.recent_messages: list[dict[str, str]] = []
-        self.memories: list[str]       = []
+        self.memories: list[dict]      = []
         self.current_prompt: str       = ""
 
     # ── Mutators ──────────────────────────────────────────────────────────────
@@ -66,6 +68,7 @@ class Bucket:
             evicted = self.recent_messages[: self._batch_reduction]
             self.recent_messages = self.recent_messages[self._batch_reduction :]
         self.recent_messages.append({"question": question, "response": response})
+        self._turn_count += 1
         return evicted
 
     def peek_curator_target(self) -> dict[str, str] | None:
@@ -82,16 +85,58 @@ class Bucket:
             return self.recent_messages[target_idx]
         return None
 
+    def get_summary_text(self) -> str:
+        """Flatten the topic tree into indented readable prose with staleness."""
+        if not self.topic_tree.get("topics"):
+            return ""
+        lines: list[str] = []
+        self._flatten_topics(self.topic_tree["topics"], lines, depth=0)
+        return "\n\n".join(lines)
+
+    def _flatten_topics(self, topics: list[dict], lines: list[str], depth: int) -> None:
+        indent = "  " * depth
+        label = "Subtopic" if depth > 0 else "Topic"
+        for t in topics:
+            turns_ago = self._turn_count - t.get("updated_at_turn", 0)
+            ago_text = f"{turns_ago} turn{'s' if turns_ago != 1 else ''} ago"
+            header = f"{indent}[{label}: {t['title']} — updated {ago_text}]"
+            body = f"{indent}{t.get('summary', '')}"
+            lines.append(f"{header}\n{body}")
+            if t.get("subtopics"):
+                self._flatten_topics(t["subtopics"], lines, depth + 1)
+
+    @property
+    def summary(self) -> str:
+        """Deprecated — returns flattened topic tree text for backward compat."""
+        return self.get_summary_text()
+
+    @summary.setter
+    def summary(self, value: str) -> None:
+        """Deprecated setter — wraps string into a single-topic node."""
+        if value and value.strip():
+            self.topic_tree = {
+                "topics": [{
+                    "id": "legacy_summary",
+                    "title": "Conversation summary",
+                    "summary": value.strip(),
+                    "subtopics": [],
+                    "created_at": int(time.time()),
+                    "updated_at": int(time.time()),
+                    "updated_at_turn": self._turn_count,
+                }]
+            }
+
     def set_summary(self, summary: str) -> None:
-        """Replace the conversation summary (called by the Observer)."""
+        """Deprecated. Wraps the string into a single-topic tree node."""
         self.summary = summary
 
-    def set_memories(self, memories: list[str]) -> None:
+    def set_memories(self, memories: list[dict]) -> None:
         """
         Replace the memories slot with a fresh retrieval result.
-        Silently truncates to the maximum of 3 if the list is longer.
+
+        Each dict should have: content, similarity, tier, retrieval_count.
         """
-        self.memories = memories[: self._max_memories]
+        self.memories = memories
 
     def set_current_prompt(self, prompt: str) -> None:
         """Set the user message that is about to be answered."""
@@ -116,7 +161,7 @@ class Bucket:
         )
 
         # ── CONVERSATION SUMMARY ──────────────────────────────────────────────
-        summary_text = self.summary.strip() if self.summary.strip() else "(no summary yet)"
+        summary_text = self.get_summary_text().strip() or "(no summary yet)"
         sections.append(
             f"{'=' * 60}\n"
             f"CONVERSATION SUMMARY\n"
@@ -144,18 +189,21 @@ class Bucket:
             f"{recent_text}"
         )
 
-        # ── RELEVANT MEMORIES ─────────────────────────────────────────────────
+        # ── RETRIEVED MEMORIES ────────────────────────────────────────────────
         if self.memories:
             mem_lines: list[str] = []
-            for i, mem in enumerate(self.memories, 1):
-                mem_lines.append(f"[{i}] {mem.strip()}")
+            for mem in self.memories:
+                sim = mem.get("similarity", 0.0)
+                tier = mem.get("tier", "unknown")
+                content = mem.get("content", "").strip()
+                mem_lines.append(f"[relevance: {sim:.2f} | {tier}] {content}")
             memories_text = "\n\n".join(mem_lines)
         else:
             memories_text = "(none retrieved)"
 
         sections.append(
             f"{'=' * 60}\n"
-            f"RELEVANT MEMORIES  ({len(self.memories)} / {self._max_memories})\n"
+            f"RETRIEVED MEMORIES  ({len(self.memories)} results)\n"
             f"{divider}\n"
             f"{memories_text}"
         )
@@ -178,7 +226,7 @@ class Bucket:
             f"Bucket("
             f"recent={len(self.recent_messages)}/{self._max_recent}, "
             f"batch_reduction={self._batch_reduction}, "
-            f"memories={len(self.memories)}/{self._max_memories}, "
-            f"summary={'set' if self.summary else 'empty'}, "
+            f"memories={len(self.memories)}, "
+            f"topics={len(self.topic_tree.get('topics', []))}, "
             f"prompt={'set' if self.current_prompt else 'empty'})"
         )

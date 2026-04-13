@@ -8,9 +8,9 @@ Warm memories  — recent decisions, active constraints, and preferences
 Cold memories  — older context, background information, and decisions
                   unlikely to be revisited soon.
 
-Retrieval queries warm first.  If warm results don't fill max_results, cold
-is queried to fill remaining slots.  Combined results are sorted by timestamp
-descending (most recent first) and capped at max_results.
+Retrieval queries both warm and cold, filters by similarity threshold,
+and returns all qualifying results sorted by similarity descending
+(most relevant first).
 
 Every memory returned by retrieve() has its retrieval_count metadata
 incremented by 1 in the owning collection.
@@ -76,7 +76,9 @@ class Retrieval:
     chroma_path          Path to the persistent Chroma database directory.
     similarity_threshold Minimum cosine similarity (0-1) to accept a result.
                          Default 0.7.
-    max_results          Maximum memories injected into the Bucket. Default 3.
+    max_results          Deprecated. Kept for backward compatibility but no
+                         longer caps results.  All memories above
+                         similarity_threshold are returned.
     """
 
     def __init__(
@@ -86,7 +88,7 @@ class Retrieval:
         max_results: int = 3,
     ) -> None:
         self._threshold  = similarity_threshold
-        self._max        = max_results
+        self._max        = max_results  # Deprecated: kept for backward compat; no longer caps results.
         self._client     = chromadb.PersistentClient(path=chroma_path)
         self._warm       = self._client.get_or_create_collection(
             name=_WARM_COLLECTION,
@@ -132,22 +134,29 @@ class Retrieval:
         )
         return memory_id
 
-    def retrieve(self, query: str) -> list[str]:
+    def retrieve(self, query: str) -> list[dict]:
         """
         Search both collections for memories relevant to query.
 
         Steps
         -----
-        1. Query warm collection first.
-        2. If warm results < max_results, query cold to fill remaining slots.
-        3. Filter both by similarity threshold.
-        4. Sort combined results by timestamp descending (most recent first).
-        5. Increment retrieval_count for every memory returned.
-        6. Return content strings capped at max_results.
+        1. Query warm and cold collections.
+        2. Filter both by similarity threshold.
+        3. Sort combined results by similarity descending (most relevant first).
+        4. Increment retrieval_count for every memory returned.
+        5. Return scored dicts with keys: content, similarity, tier, retrieval_count.
         """
         scored = self._retrieve_scored(query)
         self._increment_counts(scored)
-        return [item["content"] for item in scored]
+        return [
+            {
+                "content":         item["content"],
+                "similarity":      item["similarity"],
+                "tier":            item["tier"],
+                "retrieval_count": item["retrieval_count"],
+            }
+            for item in scored
+        ]
 
     def update_bucket(self, bucket: Bucket, query: str) -> None:
         """Retrieve relevant memories and inject them into the Bucket."""
@@ -232,19 +241,22 @@ class Retrieval:
         self,
         collection,
         query: str,
-        limit: int,
+        candidate_hint: int = 3,
     ) -> list[dict]:
         """
         Query a single Chroma collection, apply the similarity threshold, and
-        return up to `limit` scored records sorted by similarity descending.
+        return all scored records above threshold sorted by similarity descending.
+
+        candidate_hint controls how many raw results Chroma fetches before
+        filtering — it does NOT cap the final output.
 
         Each record: {id, content, similarity, timestamp, tier, retrieval_count}
         """
         count = collection.count()
-        if count == 0 or limit <= 0:
+        if count == 0:
             return []
 
-        n_candidates = min(count, max(limit * 10, 20))
+        n_candidates = min(count, max(candidate_hint * 10, 20))
 
         raw = collection.query(
             query_texts=[query],
@@ -271,35 +283,31 @@ class Retrieval:
                 })
 
         scored.sort(key=lambda x: x["similarity"], reverse=True)
-        return scored[:limit]
+        return scored
 
     def _retrieve_scored(self, query: str) -> list[dict]:
         """
-        Query warm then cold, merge, filter, and sort.
+        Query warm and cold, merge, filter by threshold, and sort.
 
         Does NOT increment retrieval_count — that is the caller's
         responsibility (retrieve() does it; _retrieve_scored() is safe for
         inspection / debugging calls).
 
-        Returns dicts with keys: id, content, similarity, timestamp, tier,
-        retrieval_count.
+        Returns all results above similarity_threshold, sorted by similarity
+        descending.  No hard cap on result count.
+
+        Each dict: {id, content, similarity, timestamp, tier, retrieval_count}
         """
-        warm_scored = self._query_collection(self._warm, query, self._max)
-        remaining   = self._max - len(warm_scored)
-        cold_scored = (
-            self._query_collection(self._cold, query, remaining)
-            if remaining > 0
-            else []
-        )
+        warm_scored = self._query_collection(self._warm, query)
+        cold_scored = self._query_collection(self._cold, query)
 
         combined = warm_scored + cold_scored
         if not combined:
             return []
 
-        # Sort by timestamp descending — most recent first.
-        # ISO-8601 strings sort lexicographically in chronological order.
-        combined.sort(key=lambda x: x["timestamp"], reverse=True)
-        return combined[: self._max]
+        # Sort by similarity descending — most relevant first.
+        combined.sort(key=lambda x: x["similarity"], reverse=True)
+        return combined
 
     def _increment_counts(self, items: list[dict]) -> None:
         """Increment retrieval_count metadata for each returned memory."""
@@ -326,7 +334,6 @@ class Retrieval:
         return (
             f"Retrieval("
             f"threshold={self._threshold}, "
-            f"max={self._max}, "
             f"warm={self._warm.count()}, "
             f"cold={self._cold.count()})"
         )
