@@ -24,9 +24,9 @@ bucket.set_summary(
 )
 
 bucket.set_memories([
-    "Decision: raw SQL only — Ecto is explicitly prohibited across the codebase.",
-    "Decision: magic links for auth — no passwords, no OAuth providers.",
-    "Decision: Redis Cluster for shared cache — no in-process caching allowed.",
+    {"content": "Decision: raw SQL only — Ecto is explicitly prohibited across the codebase.", "similarity": 0.95, "tier": "warm", "retrieval_count": 2},
+    {"content": "Decision: magic links for auth — no passwords, no OAuth providers.", "similarity": 0.91, "tier": "warm", "retrieval_count": 1},
+    {"content": "Decision: Redis Cluster for shared cache — no in-process caching allowed.", "similarity": 0.88, "tier": "warm", "retrieval_count": 0},
 ])
 
 bucket.set_current_prompt("What testing strategy did we agree on for the LiveView layer?")

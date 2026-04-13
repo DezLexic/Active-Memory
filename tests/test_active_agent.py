@@ -46,8 +46,7 @@ bucket.push_message(
 )
 
 bucket.set_memories([
-    "Authentication decision: magic-link only, single-use Redis tokens, "
-    "15-minute TTL, no passwords, no OAuth providers."
+    {"content": "Authentication decision: magic-link only, single-use Redis tokens, 15-minute TTL, no passwords, no OAuth providers.", "similarity": 0.92, "tier": "warm", "retrieval_count": 1},
 ])
 
 bucket.set_current_prompt(

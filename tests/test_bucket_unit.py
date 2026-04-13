@@ -155,10 +155,15 @@ class TestToContextString:
 
     def test_memories_appear_when_set(self):
         b = Bucket()
-        b.set_memories(["Memory A.", "Memory B."])
+        b.set_memories([
+            {"content": "Memory A.", "similarity": 0.95, "tier": "warm", "retrieval_count": 1},
+            {"content": "Memory B.", "similarity": 0.80, "tier": "cold", "retrieval_count": 0},
+        ])
         ctx = b.to_context_string()
         assert "Memory A." in ctx
         assert "Memory B." in ctx
+        assert "relevance: 0.95" in ctx
+        assert "warm" in ctx
 
     def test_recent_messages_appear_when_set(self):
         b = Bucket()
@@ -183,7 +188,7 @@ class TestToContextString:
         assert "SYSTEM INSTRUCTIONS" in ctx
         assert "CONVERSATION SUMMARY" in ctx
         assert "RECENT MESSAGES" in ctx
-        assert "RELEVANT MEMORIES" in ctx
+        assert "RETRIEVED MEMORIES" in ctx
         assert "CURRENT PROMPT" in ctx
 
 
@@ -191,14 +196,19 @@ class TestToContextString:
 
 class TestSetMemories:
 
-    def test_truncates_to_max_three(self):
-        b = Bucket()
-        b.set_memories(["m1", "m2", "m3", "m4", "m5"])
-        assert len(b.memories) == 3
+    @staticmethod
+    def _make_mem(content, sim=0.9, tier="warm", count=0):
+        return {"content": content, "similarity": sim, "tier": tier, "retrieval_count": count}
 
-    def test_fewer_than_max_are_kept_as_is(self):
+    def test_all_memories_are_kept(self):
         b = Bucket()
-        b.set_memories(["m1", "m2"])
+        mems = [self._make_mem(f"m{i}") for i in range(5)]
+        b.set_memories(mems)
+        assert len(b.memories) == 5
+
+    def test_fewer_memories_kept_as_is(self):
+        b = Bucket()
+        b.set_memories([self._make_mem("m1"), self._make_mem("m2")])
         assert len(b.memories) == 2
 
     def test_empty_list_accepted(self):
@@ -215,11 +225,11 @@ class TestRepr:
         b = Bucket(max_recent=7)
         assert "7" in repr(b)
 
-    def test_repr_shows_empty_summary(self):
+    def test_repr_shows_empty_topics(self):
         b = Bucket()
-        assert "empty" in repr(b)
+        assert "topics=0" in repr(b)
 
-    def test_repr_shows_set_summary(self):
+    def test_repr_shows_set_topics(self):
         b = Bucket()
         b.set_summary("Something.")
-        assert "set" in repr(b)
+        assert "topics=1" in repr(b)
