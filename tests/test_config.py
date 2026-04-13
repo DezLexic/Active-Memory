@@ -27,12 +27,18 @@ def _reload_config():
 
 class TestDefaultProvider:
 
-    def test_no_backend_env_var_uses_ollama(self, monkeypatch):
+    def test_no_backend_env_var_raises_value_error(self, monkeypatch):
         monkeypatch.delenv("ACTIVE_MEMORY_BACKEND", raising=False)
         monkeypatch.delenv("ACTIVE_MEMORY_MODEL",   raising=False)
+        # Prevent load_dotenv() from re-injecting ACTIVE_MEMORY_BACKEND from .env
+        try:
+            import dotenv
+            monkeypatch.setattr(dotenv, "load_dotenv", lambda *a, **kw: None)
+        except ImportError:
+            pass
         from active_memory.config import backend_from_env
-        backend = backend_from_env()
-        assert "OllamaBackend" in repr(backend)
+        with pytest.raises(ValueError, match="No Active Memory backend configured"):
+            backend_from_env()
 
     def test_explicit_ollama_uses_ollama(self, monkeypatch):
         monkeypatch.setenv("ACTIVE_MEMORY_BACKEND", "ollama")

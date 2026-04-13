@@ -10,7 +10,7 @@ if one is present.
 Variables read
 --------------
 ACTIVE_MEMORY_BACKEND    Provider to use: 'ollama' | 'anthropic' | 'huggingface'
-                         Defaults to 'ollama' when not set.
+                         Required — raises ValueError when not set.
 ACTIVE_MEMORY_MODEL      Model identifier for the selected provider.
                          Falls back to each backend's built-in default when absent.
                          Required for HuggingFace (no sensible default exists).
@@ -44,8 +44,9 @@ def backend_from_env() -> object:
     Raises
     ------
     ValueError
-        If ACTIVE_MEMORY_BACKEND is set to an unrecognised value, or if
-        ACTIVE_MEMORY_BACKEND=huggingface but ACTIVE_MEMORY_MODEL is not set.
+        If ACTIVE_MEMORY_BACKEND is not set, is set to an unrecognised
+        value, or if ACTIVE_MEMORY_BACKEND=huggingface but
+        ACTIVE_MEMORY_MODEL is not set.
     ImportError
         If the selected provider's package is not installed.
     """
@@ -58,7 +59,20 @@ def backend_from_env() -> object:
     except ImportError:
         pass  # python-dotenv not installed; env vars must come from the OS
 
-    provider   = os.getenv("ACTIVE_MEMORY_BACKEND", "ollama").lower().strip()
+    raw_provider = os.getenv("ACTIVE_MEMORY_BACKEND", "").strip()
+    if not raw_provider:
+        raise ValueError(
+            "No Active Memory backend configured.\n\n"
+            "Set the ACTIVE_MEMORY_BACKEND environment variable:\n"
+            "  ACTIVE_MEMORY_BACKEND=anthropic   (requires ANTHROPIC_API_KEY)\n"
+            "  ACTIVE_MEMORY_BACKEND=openai      (requires OPENAI_API_KEY)\n"
+            "  ACTIVE_MEMORY_BACKEND=ollama      (requires Ollama running locally)\n"
+            "  ACTIVE_MEMORY_BACKEND=huggingface (requires HF_TOKEN and ACTIVE_MEMORY_MODEL)\n\n"
+            "Or pass a backend explicitly:\n"
+            "  from active_memory.backends import AnthropicBackend\n"
+            "  pipeline = Pipeline(backend=AnthropicBackend())"
+        )
+    provider   = raw_provider.lower()
     model      = os.getenv("ACTIVE_MEMORY_MODEL", "").strip() or None
     max_tokens = int(os.getenv("ACTIVE_MEMORY_MAX_TOKENS", "2048"))
 
