@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "active-memory"
+version = "0.1.0"
+description = "A drop-in context memory layer for AI agents"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+
+dependencies = [
+    "chromadb",
+    "python-dotenv",
+]
+
+[project.optional-dependencies]
+anthropic = ["anthropic"]
+openai = ["openai"]
+ollama = ["ollama"]
+huggingface = ["huggingface_hub"]
+all = ["anthropic", "openai", "ollama", "huggingface_hub"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["active_memory*"]
