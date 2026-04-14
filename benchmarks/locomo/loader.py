@@ -16,26 +16,38 @@ Usage
     print(len(conv.turns))      # total turns across all sessions
     print(len(conv.questions))  # annotated QA pairs
 
-Dataset structure expected in locomo10.json
--------------------------------------------
-    {
-      "0": {
-        "session_1": [{"speaker": "...", "text": "..."}, ...],
-        "session_2": [...],
+Actual locomo10.json structure
+------------------------------
+    [
+      {
+        "sample_id": "conv-26",
+        "conversation": {
+          "speaker_a": "Caroline",
+          "speaker_b": "Melanie",
+          "session_1_date_time": "...",
+          "session_1": [
+            {"speaker": "Caroline", "dia_id": "D1:1", "text": "..."},
+            ...
+          ],
+          "session_2": [...],
+          ...
+        },
+        "qa": [
+          {"question": "...", "answer": "...", "category": 2, "evidence": [...]},
+          ...
+        ],
         ...
-        "qa": [{"question": "...", "answer": "...", "category": 1}, ...]
       },
-      "1": {...},
-      ...
-    }
+      ...   (10 total)
+    ]
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-# ── Category labels matching the LoCoMo paper ──────────────────────────────────
+# ── Category labels matching the LoCoMo paper ─────────────────────────────────
 
 CATEGORY_LABELS: dict[int, str] = {
     1: "Single-hop",
@@ -45,7 +57,7 @@ CATEGORY_LABELS: dict[int, str] = {
 }
 
 
-# ── Dataclasses ────────────────────────────────────────────────────────────────
+# ── Dataclasses ───────────────────────────────────────────────────────────────
 
 @dataclass
 class LoCoMoQuestion:
@@ -57,38 +69,36 @@ class LoCoMoQuestion:
 
 @dataclass
 class LoCoMoConversation:
-    id:        str               # conversation index as string, e.g. "0"
-    turns:     list[dict]        # {"speaker": str, "text": str, "session": int}
+    id:        str            # sample_id from the dataset, e.g. "conv-26"
+    idx:       int            # 0-based position in the file
+    turns:     list[dict]     # {"speaker": str, "text": str, "session": int}
     questions: list[LoCoMoQuestion]
+    speaker_a: str            # name of the first speaker
+    speaker_b: str            # name of the second speaker
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _extract_text(turn: dict) -> str:
-    """Return the turn's text content, trying several field names."""
-    for field_name in ("text", "dialog", "utterance", "content"):
-        val = turn.get(field_name, "")
-        if val:
-            return str(val).strip()
-    return ""
-
-
-def _parse_sessions(conv_data: dict) -> list[dict]:
+def _parse_sessions(conv: dict) -> list[dict]:
     """
-    Flatten all session_N entries into a single ordered list of turns.
+    Flatten all session_N entries inside a conversation dict into a single
+    ordered list of turns, sorted by session number.
 
-    Sessions are sorted numerically (session_1 before session_2, etc.) so
-    the conversation flows in the correct temporal order.
+    Skips keys that are not actual session lists (e.g. speaker_a, speaker_b,
+    session_N_date_time).
     """
     session_keys = sorted(
-        [k for k in conv_data if k.startswith("session_")],
+        [
+            k for k in conv
+            if k.startswith("session_") and isinstance(conv[k], list)
+        ],
         key=lambda k: int(k.split("_", 1)[1]),
     )
     turns: list[dict] = []
     for skey in session_keys:
         session_num = int(skey.split("_", 1)[1])
-        for raw_turn in conv_data[skey]:
-            text = _extract_text(raw_turn)
+        for raw_turn in conv[skey]:
+            text = str(raw_turn.get("text", "")).strip()
             if text:
                 turns.append({
                     "speaker": str(raw_turn.get("speaker", "")).strip(),
@@ -98,12 +108,12 @@ def _parse_sessions(conv_data: dict) -> list[dict]:
     return turns
 
 
-def _parse_questions(conv_data: dict) -> list[LoCoMoQuestion]:
-    """Parse the 'qa' list from a conversation entry."""
+def _parse_questions(item: dict) -> list[LoCoMoQuestion]:
+    """Parse the top-level 'qa' list from a dataset entry."""
     questions: list[LoCoMoQuestion] = []
-    for qa in conv_data.get("qa", []):
+    for qa in item.get("qa", []):
         question = str(qa.get("question", "")).strip()
-        answer   = str(qa.get("answer", "")).strip()
+        answer   = str(qa.get("answer",   "")).strip()
         category = int(qa.get("category", 0))
         if not question:
             continue
@@ -116,13 +126,13 @@ def _parse_questions(conv_data: dict) -> list[LoCoMoQuestion]:
     return questions
 
 
-# ── Public API ─────────────────────────────────────────────────────────────────
+# ── Public API ────────────────────────────────────────────────────────────────
 
 def load_locomo(path: str) -> list[LoCoMoConversation]:
     """
     Load locomo10.json and return all 10 conversations as dataclasses.
 
-    Conversations are returned in ascending numeric order (0 through 9).
+    Conversations are returned in file order (index 0 through 9).
 
     Parameters
     ----------
@@ -140,14 +150,18 @@ def load_locomo(path: str) -> list[LoCoMoConversation]:
         https://github.com/snap-research/locomo
     """
     with open(path, encoding="utf-8") as f:
-        data: dict = json.load(f)
+        data: list = json.load(f)
 
     conversations: list[LoCoMoConversation] = []
-    for conv_id in sorted(data.keys(), key=lambda k: int(k)):
-        conv_data = data[conv_id]
+    for idx, item in enumerate(data):
+        conv      = item.get("conversation", {})
+        sample_id = str(item.get("sample_id", idx))
         conversations.append(LoCoMoConversation(
-            id=conv_id,
-            turns=_parse_sessions(conv_data),
-            questions=_parse_questions(conv_data),
+            id=sample_id,
+            idx=idx,
+            turns=_parse_sessions(conv),
+            questions=_parse_questions(item),
+            speaker_a=str(conv.get("speaker_a", "speaker_a")),
+            speaker_b=str(conv.get("speaker_b", "speaker_b")),
         ))
     return conversations
