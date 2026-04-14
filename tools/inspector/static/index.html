@@ -1,0 +1,793 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Active Memory — LoCoMo Inspector</title>
+  <style>
+    :root {
+      --bg:        #0f1115;
+      --panel:     #161922;
+      --panel-2:   #1d2230;
+      --border:    #262c3a;
+      --text:      #e6e9ef;
+      --muted:     #8b93a7;
+      --accent:    #6aa9ff;
+      --warm:      #f0a04b;
+      --cold:      #6abef0;
+      --good:      #4ade80;
+      --bad:       #f87171;
+      --pending:   #facc15;
+      --mono:      ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+      --sans:      -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 14px;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      padding: 10px 18px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--panel);
+    }
+    header h1 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.2px;
+    }
+    header .badge {
+      font-family: var(--mono);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+    header .badge.status-running  { color: var(--good);    border-color: var(--good); }
+    header .badge.status-paused   { color: var(--pending); border-color: var(--pending); }
+    header .badge.status-error    { color: var(--bad);     border-color: var(--bad); }
+    header .badge.status-done     { color: var(--accent);  border-color: var(--accent); }
+
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 240px 360px 1fr;
+      min-height: 0;
+    }
+    .col {
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+      padding: 14px;
+      min-width: 0;
+    }
+    .col:last-child { border-right: none; }
+    .col h2 {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--muted);
+      margin: 0 0 8px;
+    }
+
+    /* ── Controls column ──────────────────────────────────────────────── */
+    .controls label {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+    .controls select {
+      width: 100%;
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 6px 8px;
+      border-radius: 4px;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+    .controls .buttons {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-top: 14px;
+    }
+    .controls button {
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 8px 0;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .controls button:hover { background: #232938; }
+    .controls button.primary { background: var(--accent); border-color: var(--accent); color: #06121f; }
+    .controls button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .status-block {
+      margin-top: 18px;
+      padding: 10px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .status-block .row {
+      display: flex;
+      justify-content: space-between;
+    }
+    .status-block .row .k { color: var(--muted); }
+    .progress-bar {
+      width: 100%;
+      height: 4px;
+      background: var(--panel-2);
+      border-radius: 2px;
+      margin-top: 4px;
+      overflow: hidden;
+    }
+    .progress-bar > div {
+      height: 100%;
+      background: var(--accent);
+      transition: width 0.3s;
+    }
+
+    .config-block {
+      margin-top: 14px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .log-block {
+      margin-top: 14px;
+      max-height: 220px;
+      overflow-y: auto;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 6px 8px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    /* ── Middle column: tabs (Turns | Questions) ─────────────────────── */
+    .tabs {
+      display: flex;
+      gap: 2px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 8px;
+    }
+    .tabs button {
+      background: transparent;
+      border: none;
+      padding: 6px 12px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+    }
+    .tabs button.active {
+      color: var(--text);
+      border-bottom-color: var(--accent);
+    }
+
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
+
+    .turn {
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .turn .speaker { color: var(--accent); font-weight: 600; }
+    .turn .meta    { color: var(--muted); font-size: 10px; }
+
+    .qrow {
+      padding: 8px 8px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      display: grid;
+      grid-template-columns: 24px 1fr 60px;
+      gap: 8px;
+      align-items: start;
+    }
+    .qrow:hover { background: var(--panel); }
+    .qrow.selected { background: var(--panel-2); }
+    .qrow .idx { color: var(--muted); font-family: var(--mono); font-size: 11px; }
+    .qrow .qtext { font-size: 12px; line-height: 1.4; }
+    .qrow .qcat {
+      display: inline-block;
+      font-size: 10px;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: var(--panel-2);
+      color: var(--muted);
+      margin-bottom: 3px;
+    }
+    .qrow .stars {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--pending);
+      text-align: right;
+    }
+    .qrow .stars.s5 { color: var(--good); }
+    .qrow .stars.s4 { color: var(--good); }
+    .qrow .stars.s3 { color: var(--pending); }
+    .qrow .stars.s2 { color: var(--bad); }
+    .qrow .stars.s1 { color: var(--bad); }
+    .qrow .stars.s0 { color: var(--muted); }
+
+    /* ── Right column: detail tabs ───────────────────────────────────── */
+    .detail-section h3 {
+      margin: 0 0 6px;
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .detail-section + .detail-section {
+      margin-top: 18px;
+    }
+    pre.dump {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 10px 12px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.5;
+      margin: 0;
+    }
+    .recent-pair {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 8px 10px;
+      margin-bottom: 6px;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .recent-pair .label {
+      font-weight: 600;
+      color: var(--accent);
+      font-size: 10px;
+      letter-spacing: 0.4px;
+    }
+
+    .mem {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 8px 10px;
+      margin-bottom: 6px;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+    .mem .meta {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      font-size: 10px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .mem .tier {
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-weight: 600;
+    }
+    .mem .tier.warm { background: rgba(240,160,75,0.15); color: var(--warm); }
+    .mem .tier.cold { background: rgba(106,190,240,0.15); color: var(--cold); }
+    .mem .bar {
+      height: 3px;
+      background: var(--panel-2);
+      border-radius: 2px;
+      flex: 1;
+      max-width: 100px;
+      overflow: hidden;
+    }
+    .mem .bar > div {
+      height: 100%;
+      background: var(--accent);
+    }
+
+    .empty {
+      color: var(--muted);
+      font-style: italic;
+      font-size: 12px;
+      padding: 14px 4px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Active Memory — LoCoMo Inspector</h1>
+    <span id="status-badge" class="badge status-idle">idle</span>
+    <span id="phase-badge" class="badge"></span>
+    <span style="flex:1"></span>
+    <span class="badge" id="conv-badge"></span>
+  </header>
+
+  <main>
+    <!-- ── Column 1: Controls ──────────────────────────────────────── -->
+    <section class="col controls">
+      <h2>Controls</h2>
+
+      <label for="conv-select">Conversation</label>
+      <select id="conv-select"></select>
+
+      <div class="buttons">
+        <button id="btn-start"  class="primary">Start</button>
+        <button id="btn-pause">Pause</button>
+        <button id="btn-resume">Resume</button>
+        <button id="btn-reset">Reset</button>
+      </div>
+
+      <div class="status-block">
+        <div class="row"><span class="k">status</span><span id="s-status">idle</span></div>
+        <div class="row"><span class="k">phase</span><span id="s-phase">—</span></div>
+        <div class="row"><span class="k">pairs</span><span id="s-pairs">0 / 0</span></div>
+        <div class="progress-bar"><div id="pb-pairs" style="width:0%"></div></div>
+        <div class="row" style="margin-top:6px"><span class="k">questions</span><span id="s-questions">0 / 0</span></div>
+        <div class="progress-bar"><div id="pb-questions" style="width:0%"></div></div>
+        <div class="row" style="margin-top:6px"><span class="k">chroma</span><span id="s-chroma">0</span></div>
+        <div class="row"><span class="k">depth</span><span id="s-depth">0 / 0</span></div>
+      </div>
+
+      <div class="config-block">
+        backend  : ollama<br/>
+        model    : gemma3:4b<br/>
+        poll     : 2s
+      </div>
+
+      <h2 style="margin-top:18px">Log</h2>
+      <div class="log-block" id="log"></div>
+    </section>
+
+    <!-- ── Column 2: Turns / Questions ────────────────────────────── -->
+    <section class="col">
+      <div class="tabs" id="mid-tabs">
+        <button data-tab="turns"     class="active">Turns</button>
+        <button data-tab="questions">Questions</button>
+      </div>
+
+      <div class="tab-pane active" id="tab-turns">
+        <div id="turns-list" class="empty">Pick a conversation and press Start.</div>
+      </div>
+
+      <div class="tab-pane" id="tab-questions">
+        <div id="questions-list" class="empty">No questions answered yet.</div>
+      </div>
+    </section>
+
+    <!-- ── Column 3: Detail panels ────────────────────────────────── -->
+    <section class="col">
+      <div class="tabs" id="detail-tabs">
+        <button data-tab="bucket"    class="active">Bucket</button>
+        <button data-tab="topics">Topics</button>
+        <button data-tab="retrieved">Retrieved</button>
+        <button data-tab="qa">Q&amp;A Detail</button>
+        <button data-tab="chroma">Chroma</button>
+      </div>
+
+      <div class="tab-pane active" id="tab-bucket">
+        <div class="detail-section">
+          <h3>Recent Messages <span id="depth-label" style="text-transform:none"></span></h3>
+          <div id="recent-list" class="empty">No snapshot yet.</div>
+        </div>
+      </div>
+
+      <div class="tab-pane" id="tab-topics">
+        <div class="detail-section">
+          <h3>Flattened Topic Summary</h3>
+          <pre class="dump" id="topic-summary">(none)</pre>
+        </div>
+        <div class="detail-section">
+          <h3>Raw Topic Tree</h3>
+          <pre class="dump" id="topic-tree">{}</pre>
+        </div>
+      </div>
+
+      <div class="tab-pane" id="tab-retrieved">
+        <div class="detail-section">
+          <h3>Retrieved Memories <span id="retrieved-meta" style="text-transform:none;color:var(--muted);font-weight:400;"></span></h3>
+          <div id="retrieved-list" class="empty">No query yet — appears during Q&amp;A.</div>
+        </div>
+      </div>
+
+      <div class="tab-pane" id="tab-qa">
+        <div id="qa-detail" class="empty">Click a question on the left to see details.</div>
+      </div>
+
+      <div class="tab-pane" id="tab-chroma">
+        <div class="detail-section">
+          <h3>Chroma Collection</h3>
+          <pre class="dump" id="chroma-info">(no run yet)</pre>
+          <p style="color:var(--muted);font-size:11px;margin-top:8px;">
+            Full per-item dumps are not yet exposed — see <code>tools/TODO.md</code>.
+          </p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    // ── Tab switching ─────────────────────────────────────────────────
+    function bindTabs(rootId) {
+      const root = document.getElementById(rootId);
+      root.querySelectorAll("button").forEach(btn => {
+        btn.addEventListener("click", () => {
+          root.querySelectorAll("button").forEach(b => b.classList.remove("active"));
+          btn.classList.add("active");
+          const target = btn.dataset.tab;
+          // Find the parent .col, then toggle its tab-panes.
+          const col = root.parentElement;
+          col.querySelectorAll(":scope > .tab-pane").forEach(p => p.classList.remove("active"));
+          col.querySelector("#tab-" + target).classList.add("active");
+        });
+      });
+    }
+    bindTabs("mid-tabs");
+    bindTabs("detail-tabs");
+
+    // ── Conversation list ────────────────────────────────────────────
+    let CONVERSATIONS = [];
+    let CONV_TURNS_CACHE = {};   // idx → list of turns (we need to fetch fresh)
+
+    async function loadConversations() {
+      try {
+        const r = await fetch("/api/conversations");
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({detail: r.statusText}));
+          alert("Failed to load conversations: " + (err.detail || r.statusText));
+          return;
+        }
+        CONVERSATIONS = await r.json();
+        const sel = document.getElementById("conv-select");
+        sel.innerHTML = "";
+        CONVERSATIONS.forEach(c => {
+          const opt = document.createElement("option");
+          opt.value = c.idx;
+          opt.textContent =
+            `[${c.idx}] ${c.id}  —  ${c.pairs}p / ${c.questions}q  (${c.speaker_a} & ${c.speaker_b})`;
+          sel.appendChild(opt);
+        });
+      } catch (e) {
+        alert("Network error loading conversations: " + e);
+      }
+    }
+
+    // ── Polling state ────────────────────────────────────────────────
+    let SELECTED_Q = null;        // idx of pinned question (1-based) or null
+    let LAST_TURNS_RENDERED = -1; // conv idx whose turns are currently shown
+
+    async function pollState() {
+      try {
+        const r = await fetch("/api/state");
+        if (!r.ok) return;
+        const s = await r.json();
+        renderState(s);
+      } catch (e) {
+        // Ignore transient network errors.
+      }
+    }
+
+    function renderState(s) {
+      // ── Header badges ──
+      const sb = document.getElementById("status-badge");
+      sb.className = "badge status-" + s.status;
+      sb.textContent = s.status;
+      const pb = document.getElementById("phase-badge");
+      pb.textContent = s.phase ? "phase: " + s.phase : "";
+      const cb = document.getElementById("conv-badge");
+      cb.textContent = s.conv_id ? `conv ${s.conv_id} (idx ${s.conv_idx})` : "";
+
+      // ── Status block ──
+      document.getElementById("s-status").textContent = s.status;
+      document.getElementById("s-phase").textContent  = s.phase || "—";
+
+      const pp = s.progress;
+      document.getElementById("s-pairs").textContent =
+        `${pp.pairs_done} / ${pp.pairs_total}`;
+      document.getElementById("s-questions").textContent =
+        `${pp.questions_done} / ${pp.questions_total}`;
+      document.getElementById("pb-pairs").style.width =
+        pp.pairs_total ? (100 * pp.pairs_done / pp.pairs_total) + "%" : "0%";
+      document.getElementById("pb-questions").style.width =
+        pp.questions_total ? (100 * pp.questions_done / pp.questions_total) + "%" : "0%";
+
+      const snap = s.snapshot;
+      document.getElementById("s-chroma").textContent =
+        snap ? snap.chroma_count : 0;
+      document.getElementById("s-depth").textContent =
+        snap ? `${snap.depth} / ${snap.max_recent}` : "0 / 0";
+
+      // ── Log ──
+      const logEl = document.getElementById("log");
+      logEl.innerHTML = (s.log || []).slice(-80).map(l =>
+        `<div>${escapeHtml(l)}</div>`
+      ).join("");
+      logEl.scrollTop = logEl.scrollHeight;
+
+      // ── Buttons ──
+      document.getElementById("btn-start").disabled =
+        s.status === "running" || s.status === "paused";
+      document.getElementById("btn-pause").disabled  = s.status !== "running";
+      document.getElementById("btn-resume").disabled = s.status !== "paused";
+
+      // ── Turns column (render once per conv) ──
+      if (s.conv_idx !== null && s.conv_idx !== LAST_TURNS_RENDERED) {
+        renderTurns(s.conv_idx);
+        LAST_TURNS_RENDERED = s.conv_idx;
+      }
+      if (s.conv_idx === null) {
+        LAST_TURNS_RENDERED = -1;
+        document.getElementById("turns-list").innerHTML =
+          '<div class="empty">Pick a conversation and press Start.</div>';
+      }
+
+      // ── Questions list ──
+      renderQuestions(s.questions || []);
+
+      // ── Snapshot panels ──
+      if (snap) {
+        renderRecent(snap);
+        renderTopics(snap);
+        renderRetrieved(snap);
+        renderChroma(snap);
+      }
+
+      // ── Pinned Q&A detail ──
+      renderQADetail(s.questions || []);
+
+      // ── Error ──
+      if (s.error && s.status === "error") {
+        const logEl = document.getElementById("log");
+        logEl.innerHTML += `<div style="color:var(--bad)">${escapeHtml(s.error)}</div>`;
+      }
+    }
+
+    async function renderTurns(idx) {
+      // Fetch the conversation list once; we need turn texts for display.
+      // The /api/conversations endpoint doesn't include turn bodies, so we
+      // do a separate call to a (future) endpoint — but for now we render
+      // a placeholder that lists pair counts only.
+      const conv = CONVERSATIONS.find(c => c.idx === idx);
+      const el = document.getElementById("turns-list");
+      if (!conv) {
+        el.className = "empty";
+        el.textContent = "No conversation selected.";
+        return;
+      }
+      el.className = "";
+      el.innerHTML = `
+        <div class="turn">
+          <div class="speaker">${escapeHtml(conv.id)}</div>
+          <div class="meta">
+            ${conv.turns} turns &middot; ${conv.pairs} pairs &middot;
+            ${conv.questions} questions &middot;
+            speakers: ${escapeHtml(conv.speaker_a)} &amp; ${escapeHtml(conv.speaker_b)}
+          </div>
+          <div style="margin-top:8px;color:var(--muted);font-size:11px;">
+            Live snapshot of the Bucket's recent messages is in the
+            <strong>Bucket</strong> tab on the right.
+          </div>
+        </div>
+      `;
+    }
+
+    function renderQuestions(qs) {
+      const el = document.getElementById("questions-list");
+      if (!qs.length) {
+        el.className = "empty";
+        el.textContent = "No questions answered yet.";
+        return;
+      }
+      el.className = "";
+      el.innerHTML = qs.map(q => {
+        const score = q.score || 0;
+        const stars = "★".repeat(score) + "·".repeat(5 - score);
+        const sel = (SELECTED_Q === q.idx) ? "selected" : "";
+        return `
+          <div class="qrow ${sel}" data-idx="${q.idx}">
+            <div class="idx">${q.idx}</div>
+            <div>
+              <span class="qcat">${escapeHtml(q.category)}</span>
+              <div class="qtext">${escapeHtml(q.question)}</div>
+            </div>
+            <div class="stars s${score}">${stars}</div>
+          </div>
+        `;
+      }).join("");
+      el.querySelectorAll(".qrow").forEach(row => {
+        row.addEventListener("click", () => {
+          SELECTED_Q = parseInt(row.dataset.idx);
+          // Switch detail tab to Q&A.
+          document.querySelector('#detail-tabs button[data-tab="qa"]').click();
+          pollState();   // refresh detail immediately
+        });
+      });
+    }
+
+    function renderRecent(snap) {
+      const el = document.getElementById("recent-list");
+      document.getElementById("depth-label").textContent =
+        `(${snap.depth} / ${snap.max_recent})`;
+      if (!snap.recent_messages.length) {
+        el.className = "empty";
+        el.textContent = "Stack is empty.";
+        return;
+      }
+      el.className = "";
+      el.innerHTML = snap.recent_messages.map((p, i) => `
+        <div class="recent-pair">
+          <div class="label">[${i + 1}] Q</div>
+          <div>${escapeHtml(p.question)}</div>
+          <div class="label" style="margin-top:4px;">A</div>
+          <div>${escapeHtml(p.response)}</div>
+        </div>
+      `).join("");
+    }
+
+    function renderTopics(snap) {
+      document.getElementById("topic-summary").textContent =
+        snap.topic_summary || "(none yet)";
+      document.getElementById("topic-tree").textContent =
+        JSON.stringify(snap.topic_tree, null, 2);
+    }
+
+    function renderRetrieved(snap) {
+      const el = document.getElementById("retrieved-list");
+      const meta = document.getElementById("retrieved-meta");
+      if (snap.last_query) {
+        meta.textContent =
+          ` — query: "${truncate(snap.last_query, 60)}" — ${snap.retrieved.length} results`;
+      } else {
+        meta.textContent = "";
+      }
+      if (!snap.retrieved.length) {
+        el.className = "empty";
+        el.textContent = snap.last_query
+          ? "No memories above similarity threshold for this query."
+          : "No query yet — appears during Q&A.";
+        return;
+      }
+      el.className = "";
+      el.innerHTML = snap.retrieved.map(m => {
+        const sim = (m.similarity || 0);
+        const pct = (sim * 100).toFixed(0);
+        const tier = m.tier || "warm";
+        return `
+          <div class="mem">
+            <div class="meta">
+              <span class="tier ${tier}">${tier}</span>
+              <span>sim ${sim.toFixed(3)}</span>
+              <div class="bar"><div style="width:${pct}%"></div></div>
+              <span>retrievals: ${m.retrieval_count || 0}</span>
+            </div>
+            <div>${escapeHtml(m.content || "")}</div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function renderChroma(snap) {
+      document.getElementById("chroma-info").textContent =
+        `total items: ${snap.chroma_count}`;
+    }
+
+    function renderQADetail(qs) {
+      const el = document.getElementById("qa-detail");
+      if (SELECTED_Q === null) {
+        el.className = "empty";
+        el.textContent = "Click a question on the left to see details.";
+        return;
+      }
+      const q = qs.find(x => x.idx === SELECTED_Q);
+      if (!q) {
+        el.className = "empty";
+        el.textContent = "Question not yet answered.";
+        return;
+      }
+      el.className = "";
+      const score = q.score || 0;
+      const stars = "★".repeat(score) + "·".repeat(5 - score);
+      el.innerHTML = `
+        <div class="detail-section">
+          <h3>Question ${q.idx} — ${escapeHtml(q.category)} — score
+            <span class="stars s${score}" style="font-family:var(--mono);">${stars}</span>
+          </h3>
+          <pre class="dump">${escapeHtml(q.question)}</pre>
+        </div>
+        <div class="detail-section">
+          <h3>Ground Truth</h3>
+          <pre class="dump">${escapeHtml(q.ground_truth)}</pre>
+        </div>
+        <div class="detail-section">
+          <h3>Agent Response</h3>
+          <pre class="dump">${escapeHtml(q.response)}</pre>
+        </div>
+      `;
+    }
+
+    function escapeHtml(s) {
+      if (s === null || s === undefined) return "";
+      return String(s)
+        .replace(/&/g,  "&amp;")
+        .replace(/</g,  "&lt;")
+        .replace(/>/g,  "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function truncate(s, n) {
+      s = String(s).replace(/\s+/g, " ").trim();
+      return s.length > n ? s.slice(0, n) + "…" : s;
+    }
+
+    // ── Buttons ──────────────────────────────────────────────────────
+    document.getElementById("btn-start").addEventListener("click", async () => {
+      const idx = parseInt(document.getElementById("conv-select").value);
+      const r = await fetch("/api/start", {
+        method:  "POST",
+        headers: {"Content-Type": "application/json"},
+        body:    JSON.stringify({conv_idx: idx}),
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({detail: r.statusText}));
+        alert("Start failed: " + (err.detail || r.statusText));
+        return;
+      }
+      SELECTED_Q = null;
+      LAST_TURNS_RENDERED = -1;
+      pollState();
+    });
+    document.getElementById("btn-pause").addEventListener("click", async () => {
+      await fetch("/api/pause",  {method: "POST"});
+      pollState();
+    });
+    document.getElementById("btn-resume").addEventListener("click", async () => {
+      await fetch("/api/resume", {method: "POST"});
+      pollState();
+    });
+    document.getElementById("btn-reset").addEventListener("click", async () => {
+      if (!confirm("Reset will kill the current run and remove its Chroma store.")) return;
+      await fetch("/api/reset",  {method: "POST"});
+      SELECTED_Q = null;
+      LAST_TURNS_RENDERED = -1;
+      pollState();
+    });
+
+    // ── Bootstrap ────────────────────────────────────────────────────
+    loadConversations().then(pollState);
+    setInterval(pollState, 2000);
+  </script>
+</body>
+</html>
