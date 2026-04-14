@@ -38,3 +38,6 @@ chroma_db_*/
 
 # Generated NIAH chat logs (large data files — regenerate with generate_chat.py)
 benchmarks/contexts/niah_chat_*.py
+
+# LoCoMo dataset — clone from https://github.com/snap-research/locomo
+benchmarks/locomo/data/

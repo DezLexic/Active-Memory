@@ -107,7 +107,8 @@ def _build_continuation_prompt(num_pairs: int, start_index: int, last_messages: 
 The conversation so far ended with these messages:
 {last_messages}
 
-Continue the conversation naturally from where it left off.
+IMPORTANT: The messages above are context only — do NOT include them in your output.
+Your first output message must have index {start_index} and continue from where the context ends.
 
 OUTPUT FORMAT — follow this exactly, no deviations:
 - Output raw Python list syntax only
@@ -157,14 +158,14 @@ def _merge_chunks(chunks: list[str]) -> str:
 
 
 _QUOTE_MAP = str.maketrans({
-    '\u201c': '"',   # "  left double quotation mark
-    '\u201d': '"',   # "  right double quotation mark
-    '\u201e': '"',   # „  double low-9 quotation mark
-    '\u2033': '"',   # ″  double prime
-    '\u2018': "'",   # '  left single quotation mark
-    '\u2019': "'",   # '  right single quotation mark
-    '\u201b': "'",   # ‛  single high-reversed-9 quotation mark
-    '\u2032': "'",   # ′  prime
+    '\u201c': '\\"',  # "  left double quotation mark  → escaped \" (valid inside "...")
+    '\u201d': '\\"',  # "  right double quotation mark → escaped \"
+    '\u201e': '\\"',  # „  double low-9 quotation mark → escaped \"
+    '\u2033': '\\"',  # ″  double prime                → escaped \"
+    '\u2018': "'",    # '  left single quotation mark
+    '\u2019': "'",    # '  right single quotation mark
+    '\u201b': "'",    # ‛  single high-reversed-9 quotation mark
+    '\u2032': "'",    # ′  prime
 })
 
 
