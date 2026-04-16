@@ -23,11 +23,14 @@ failure the pair is not stored.
 from __future__ import annotations
 
 import json
+import logging
 import time
 
 from .retrieval     import Retrieval
 from .backends.base import LLMBackend
 from .monitor       import ProcessMonitor
+
+logger = logging.getLogger(__name__)
 
 
 class Curator:
@@ -101,7 +104,7 @@ class Curator:
             with ProcessMonitor("curator evaluating pair"):
                 raw_text = self._backend.chat([{"role": "user", "content": prompt}])
         except Exception as exc:
-            print(f"[Curator] LLM call failed: {exc}")
+            logger.error("Curator: LLM call failed (%s); pair not stored.", exc)
             return
 
         try:
@@ -124,7 +127,7 @@ class Curator:
             if tier not in ("warm", "cold"):
                 tier = "warm"
         except (json.JSONDecodeError, KeyError, IndexError) as exc:
-            print(f"[Curator] JSON parse error: {exc}  raw={raw_text!r}")
+            logger.warning("Curator: JSON parse error (%s); raw=%r; pair not stored.", exc, raw_text)
             return
 
         if store and self._retrieval is not None:

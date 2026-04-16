@@ -5,6 +5,7 @@ python-dotenv
 
 # Testing
 pytest
+pytest-cov
 
 # Optional provider backends — install whichever you need:
 #   pip install anthropic        # for AnthropicBackend

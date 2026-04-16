@@ -65,7 +65,6 @@ def backend_from_env() -> object:
             "No Active Memory backend configured.\n\n"
             "Set the ACTIVE_MEMORY_BACKEND environment variable:\n"
             "  ACTIVE_MEMORY_BACKEND=anthropic   (requires ANTHROPIC_API_KEY)\n"
-            "  ACTIVE_MEMORY_BACKEND=openai      (requires OPENAI_API_KEY)\n"
             "  ACTIVE_MEMORY_BACKEND=ollama      (requires Ollama running locally)\n"
             "  ACTIVE_MEMORY_BACKEND=huggingface (requires HF_TOKEN and ACTIVE_MEMORY_MODEL)\n\n"
             "Or pass a backend explicitly:\n"
