@@ -19,17 +19,20 @@ On every turn the first three are assembled into a single enriched context you p
 
 ## Install
 
+Install directly from GitHub (PyPI release coming later):
+
 ```bash
-pip install active-memory
+pip install "active-memory[anthropic] @ git+https://github.com/DezLexic/Active-Memory.git"
 ```
 
-Then install the extra for your provider:
+Pick the extra that matches your provider:
 
 ```bash
-pip install active-memory[anthropic]
-pip install active-memory[ollama]
-pip install active-memory[huggingface]
-pip install active-memory[all]        # everything
+pip install "active-memory[anthropic]   @ git+https://github.com/DezLexic/Active-Memory.git"
+pip install "active-memory[ollama]      @ git+https://github.com/DezLexic/Active-Memory.git"
+pip install "active-memory[huggingface] @ git+https://github.com/DezLexic/Active-Memory.git"
+pip install "active-memory[all]         @ git+https://github.com/DezLexic/Active-Memory.git"
+pip install "active-memory[inspector]   @ git+https://github.com/DezLexic/Active-Memory.git"
 ```
 
 ## Quick start
@@ -79,6 +82,34 @@ pipeline.chat("Database is CockroachDB, raw SQL only, no ORM.")
 response = pipeline.chat("What stack did we decide on?")
 ```
 
+## Inspector — see memory working live
+
+Active Memory ships with a dashboard that runs the full pipeline against a real long-conversation benchmark (LoCoMo) and streams every step into a browser: pairs ingesting, the topic tree growing, memories landing in Chroma, and questions being answered with their retrieved context.
+
+It's the fastest way to *see* what each layer is doing — and to debug your own configuration before you wire Active Memory into anything real.
+
+```bash
+pip install "active-memory[inspector] @ git+https://github.com/DezLexic/Active-Memory.git"
+
+# Get the LoCoMo dataset (one-time)
+git clone https://github.com/snap-research/locomo benchmarks/locomo
+# Make sure benchmarks/locomo/data/locomo10.json exists.
+
+# Run the dashboard
+uvicorn tools.inspector.server:app --reload --port 8000
+```
+
+Open `http://localhost:8000` and pick a conversation. Defaults to a local Ollama backend (`gemma3:4b` on `http://localhost:11434`); edit `tools/inspector/server.py` to change models or providers.
+
+What you'll see:
+
+- **Conversation picker** — choose a LoCoMo session
+- **Live ingest** — message pairs flowing into the Bucket, Observer summarizing on each eviction
+- **Memory store** — warm/cold Chroma counts updating as the Curator stores decisions
+- **QA phase** — the benchmark's annotated questions answered against the built-up memory, with retrieved snippets and a 1–5 score per answer
+
+Status: working but minimal. Planned features (step-mode, custom questions, trace export, side-by-side diffs, Chroma browser) are tracked in `tools/TODO.md`.
+
 ## Configuration
 
 Set `ACTIVE_MEMORY_BACKEND` in your environment or a `.env` file:
@@ -102,7 +133,8 @@ If no backend is configured, `backend_from_env()` raises a `ValueError` with set
 ## Project structure
 
 ```
-active_memory/   Core package (Pipeline, Bucket, Retrieval, Observer, Curator, backends)
-tests/           Unit and integration tests (pytest)
-benchmarks/      NIAH benchmark and stress tests
+active_memory/    Core package (Pipeline, Bucket, Retrieval, Observer, Curator, backends)
+tests/            Unit and integration tests (pytest)
+benchmarks/       NIAH benchmark and stress tests
+tools/inspector/  Live dashboard (FastAPI) for visualizing memory during a benchmark run
 ```
