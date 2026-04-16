@@ -75,7 +75,9 @@ class Retrieval:
     ----------
     chroma_path          Path to the persistent Chroma database directory.
     similarity_threshold Minimum cosine similarity (0-1) to accept a result.
-                         Default 0.7.
+                         Default 0.3 — calibrated for Chroma's built-in
+                         MiniLM embedder on paraphrased queries. Raise for
+                         stricter matching; lower to see more loose hits.
     max_results          Deprecated. Kept for backward compatibility but no
                          longer caps results.  All memories above
                          similarity_threshold are returned.
@@ -84,7 +86,7 @@ class Retrieval:
     def __init__(
         self,
         chroma_path: str,
-        similarity_threshold: float = 0.7,
+        similarity_threshold: float = 0.3,
         max_results: int = 3,
     ) -> None:
         self._threshold  = similarity_threshold

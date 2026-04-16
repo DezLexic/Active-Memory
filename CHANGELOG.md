@@ -19,6 +19,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-slot labels and bullet lists, rather than dumping raw JSON.
 - Legacy `Bucket.summary` setter still works — the incoming prose is stored
   as a single entry in the `facts` slot so old callers continue to render.
+- Inspector now configures Python logging so silent Curator warnings
+  (LLM call failures, JSON parse errors) actually reach stderr, and
+  surfaces every Curator decision (`stored (warm)` / `dropped`) plus a
+  per-question retrieval summary (`retrieved N mems, top sim=0.XX`) in
+  the rolling log feed.
+- Inspector Chroma tab now lists every stored memory with its tier,
+  timestamp, and retrieval count — previously a TODO stub showing only
+  a count.
+- Lowered default `Retrieval.similarity_threshold` from `0.7` to `0.3`
+  to match the realistic behaviour of Chroma's default MiniLM embedder on
+  paraphrased queries. Tests pin their own thresholds explicitly, so
+  this is a default-only change with no test impact.
 
 ## [0.1.0] - 2026-04-15
 
