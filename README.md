@@ -1,4 +1,4 @@
-# Active Memory
+# Active Memory - A context memory layer for AI agents
 
 Human memory doesn't work by replaying everything that ever happened. It maintains a running sense of context, surfaces what's relevant when it's needed, and lets the rest fade into the background — until something brings it back.
 
