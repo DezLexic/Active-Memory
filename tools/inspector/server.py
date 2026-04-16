@@ -36,6 +36,7 @@ Design notes
 from __future__ import annotations
 
 import copy
+import logging
 import os
 import pathlib
 import shutil
@@ -43,6 +44,15 @@ import sys
 import threading
 import time
 from typing import Any
+
+# Surface active_memory.curator / .observer / .pipeline log lines that would
+# otherwise vanish into the handler-less root logger. Without this, silent
+# Curator JSON-parse failures produce no visible output at all — which is
+# exactly how the "no memories ever retrieved" bug went undetected.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(name)s  %(levelname)s  %(message)s",
+)
 
 # ── Path setup — let the server import active_memory and loader.py ───────────
 
@@ -169,6 +179,13 @@ def _log(msg: str) -> None:
 def _snapshot(pipeline: Pipeline, last_query: str | None = None) -> dict[str, Any]:
     """Deep-copy a snapshot of the live pipeline state for the UI."""
     bucket = pipeline.bucket
+    # get_all_metadata() walks warm+cold and returns plain dicts — no lock
+    # needed, and safe to call even when collections are empty.
+    try:
+        stored = pipeline.retrieval.get_all_metadata()
+    except Exception as exc:
+        stored = []
+        _log(f"get_all_metadata failed: {type(exc).__name__}: {exc}")
     snap: dict[str, Any] = {
         "recent_messages": copy.deepcopy(bucket.recent_messages),
         "depth":           len(bucket.recent_messages),
@@ -176,6 +193,7 @@ def _snapshot(pipeline: Pipeline, last_query: str | None = None) -> dict[str, An
         "topic_tree":      copy.deepcopy(bucket.topic_tree),
         "topic_summary":   bucket.get_summary_text(),
         "chroma_count":    pipeline.retrieval._collection.count(),
+        "stored_memories": stored,
     }
     if last_query:
         # _retrieve_scored does NOT increment retrieval_count — safe to poll.
@@ -254,11 +272,30 @@ def _run_benchmark(conv_idx: int) -> None:
         for i, (u, a) in enumerate(pairs, 1):
             if not _check_pause():
                 return
+            # Reset Curator decision so we can tell which turn produced the
+            # next "stored / dropped" line. Curator only runs on eviction,
+            # so most turns will leave these None (no log line emitted).
+            _pipeline._curator._last_store  = None
+            _pipeline._curator._last_reason = None
+            _pipeline._curator._last_tier   = None
             _pipeline.ingest(u, a)
             with _state_lock:
                 _state["progress"]["pairs_done"] = i
                 _state["snapshot"] = _snapshot(_pipeline)
                 _log(f"ingested pair {i}/{len(pairs)}")
+                # Surface Curator decisions so silent store=false isn't
+                # indistinguishable from Curator never running.
+                cur = _pipeline._curator
+                if cur._last_store is True:
+                    _log(
+                        f"  -> curator STORED ({cur._last_tier or 'warm'}): "
+                        f"{cur._last_reason or '(no reason)'}"
+                    )
+                elif cur._last_store is False:
+                    _log(
+                        f"  -> curator dropped: "
+                        f"{cur._last_reason or '(no reason)'}"
+                    )
 
         # ── Phase 2: Q&A ──────────────────────────────────────────────────────
         with _state_lock:
@@ -287,7 +324,20 @@ def _run_benchmark(conv_idx: int) -> None:
                 })
                 _state["progress"]["questions_done"] = i
                 _state["snapshot"] = _snapshot(_pipeline, last_query=q.question)
-                _log(f"q{i}/{len(conv.questions)} score={score}")
+                # Surface retrieval result count so we can tell at a glance
+                # whether memories actually show up for each question.
+                if retrieved:
+                    top_sim = max(m.get("similarity", 0.0) for m in retrieved)
+                    _log(
+                        f"q{i}/{len(conv.questions)} score={score} — "
+                        f"retrieved {len(retrieved)} mems "
+                        f"(top sim={top_sim:.2f})"
+                    )
+                else:
+                    _log(
+                        f"q{i}/{len(conv.questions)} score={score} — "
+                        f"retrieved 0 mems"
+                    )
 
         with _state_lock:
             _state["status"] = "done"

@@ -483,11 +483,8 @@
 
       <div class="tab-pane" id="tab-chroma">
         <div class="detail-section">
-          <h3>Chroma Collection</h3>
-          <pre class="dump" id="chroma-info">(no run yet)</pre>
-          <p style="color:var(--muted);font-size:11px;margin-top:8px;">
-            Full per-item dumps are not yet exposed — see <code>tools/TODO.md</code>.
-          </p>
+          <h3>Chroma Collection <span id="chroma-info" style="text-transform:none;color:var(--muted);font-weight:400;font-size:11px;"></span></h3>
+          <div id="chroma-list" class="empty">No run yet.</div>
         </div>
       </div>
     </section>
@@ -813,8 +810,43 @@
     }
 
     function renderChroma(snap) {
-      document.getElementById("chroma-info").textContent =
-        `total items: ${snap.chroma_count}`;
+      const info = document.getElementById("chroma-info");
+      const el   = document.getElementById("chroma-list");
+      const items = Array.isArray(snap.stored_memories) ? snap.stored_memories : [];
+
+      const warm = items.filter(m => (m.tier || "warm") === "warm").length;
+      const cold = items.filter(m => (m.tier || "warm") === "cold").length;
+      info.textContent = `— ${warm} warm / ${cold} cold — ${items.length} total`;
+
+      if (!items.length) {
+        el.className = "empty";
+        el.textContent = snap.chroma_count === 0
+          ? "Chroma is empty. No memories have been stored yet — check the log feed for Curator decisions."
+          : "Waiting for first snapshot…";
+        return;
+      }
+
+      // Newest first — stored timestamps are ISO strings.
+      const sorted = items.slice().sort((a, b) =>
+        String(b.timestamp || "").localeCompare(String(a.timestamp || ""))
+      );
+
+      el.className = "";
+      el.innerHTML = sorted.map(m => {
+        const tier = m.tier || "warm";
+        const ts   = (m.timestamp || "").replace("T", " ").slice(0, 19);
+        return `
+          <div class="mem">
+            <div class="meta">
+              <span class="tier ${tier}">${tier}</span>
+              <span>${escapeHtml(ts)}</span>
+              <span style="flex:1"></span>
+              <span>retrievals: ${m.retrieval_count || 0}</span>
+            </div>
+            <div>${escapeHtml(m.content || "")}</div>
+          </div>
+        `;
+      }).join("");
     }
 
     function renderQADetail(qs) {
