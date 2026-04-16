@@ -268,10 +268,11 @@ def _run_benchmark(conv_idx: int) -> None:
             if not _check_pause():
                 return
 
-            ctx      = _pipeline.build_context(q.question)
-            response = _pipeline._backend.chat(ctx)
-            score    = _judge(q.question, q.answer, response,
-                              model=DEFAULT_MODEL, base_url=AGENT_URL)
+            ctx       = _pipeline.build_context(q.question)
+            retrieved = copy.deepcopy(_pipeline._bucket.memories)
+            response  = _pipeline._backend.chat(ctx)
+            score     = _judge(q.question, q.answer, response,
+                               model=DEFAULT_MODEL, base_url=AGENT_URL)
 
             with _state_lock:
                 _state["questions"].append({
@@ -282,6 +283,7 @@ def _run_benchmark(conv_idx: int) -> None:
                     "ground_truth": q.answer,
                     "response":     response,
                     "score":        score,
+                    "retrieved":    retrieved,
                 })
                 _state["progress"]["questions_done"] = i
                 _state["snapshot"] = _snapshot(_pipeline, last_query=q.question)
