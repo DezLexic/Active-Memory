@@ -7,6 +7,17 @@ chroma_db_*/
 .claude/
 .env
 
+# Coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
 # Old root-level source files superseded by package structure
 /active_agent.py
 /active_agent_v1.py

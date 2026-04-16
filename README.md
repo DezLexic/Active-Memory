@@ -27,8 +27,8 @@ Then install the extra for your provider:
 
 ```bash
 pip install active-memory[anthropic]
-pip install active-memory[openai]
 pip install active-memory[ollama]
+pip install active-memory[huggingface]
 pip install active-memory[all]        # everything
 ```
 
@@ -86,7 +86,6 @@ Set `ACTIVE_MEMORY_BACKEND` in your environment or a `.env` file:
 | Provider | Env vars |
 |----------|----------|
 | **Anthropic** | `ACTIVE_MEMORY_BACKEND=anthropic` `ANTHROPIC_API_KEY=sk-ant-...` |
-| **OpenAI** | `ACTIVE_MEMORY_BACKEND=openai` `OPENAI_API_KEY=sk-...` |
 | **Ollama** | `ACTIVE_MEMORY_BACKEND=ollama` `OLLAMA_BASE_URL=http://localhost:11434` |
 | **Hugging Face** | `ACTIVE_MEMORY_BACKEND=huggingface` `ACTIVE_MEMORY_MODEL=meta-llama/...` `HF_TOKEN=hf_...` |
 

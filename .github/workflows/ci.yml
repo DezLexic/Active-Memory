@@ -29,8 +29,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run unit tests
-        run: pytest -v
+      - name: Run unit tests with coverage
+        run: pytest -v --cov=active_memory --cov-report=term-missing
         # Integration tests (Ollama, real API keys) are excluded by conftest.py
         # and the script-style test files that run module-level code.
         #
