@@ -31,7 +31,11 @@ class Observer:
     Parameters
     ----------
     backend             Any LLMBackend-conforming object.
-    max_summary_length  Soft character limit per topic node summary.
+    max_summary_length  Deprecated. Retained for backward-compat; has no effect
+                        since topic nodes now use typed slots (facts, decisions,
+                        preferences, open_threads, quotes) rather than a single
+                        prose summary. A 200-char soft limit per slot item is
+                        baked into the prompt.
     """
 
     def __init__(
@@ -76,24 +80,55 @@ class Observer:
         )
 
         prompt = (
-            "You are maintaining a structured topic tree that summarises a conversation.\n\n"
+            "You are maintaining a structured topic tree that captures concrete detail "
+            "from a conversation so the information survives after messages scroll out "
+            "of recent history.\n\n"
             "CURRENT TOPIC TREE (JSON):\n"
             f"{current_tree_json}\n\n"
             "MESSAGE PAIRS BEING REMOVED FROM RECENT HISTORY:\n"
             f"{pairs_text}\n\n"
-            "INSTRUCTIONS:\n"
-            "1. Update the topic tree to incorporate information from the evicted messages.\n"
-            "2. Each topic node must have this exact shape:\n"
-            '   {"id": "<slug>", "title": "<short label>", "summary": "<prose>", '
-            '"subtopics": [...], "created_at": <unix_ts>, "updated_at": <unix_ts>, '
-            '"updated_at_turn": <int>}\n'
-            f"3. Keep each node's summary under {self._max_summary_length} characters.\n"
-            "4. Merge related information into existing topics — do not create duplicates.\n"
-            "5. Use subtopics for specific sub-decisions under a broader topic.\n"
-            f"6. The current turn count is {bucket._turn_count}. "
-            "Set updated_at_turn to this value for any node you create or modify.\n"
-            "7. Never delete existing topics — only update or add.\n"
-            "8. Return ONLY the updated JSON object with a top-level \"topics\" array. "
+            "NODE SHAPE:\n"
+            "Each topic node must have this exact shape:\n"
+            '  {"id": "<slug>", "title": "<short label>",\n'
+            '   "facts": [...], "decisions": [...], "preferences": [...],\n'
+            '   "open_threads": [...], "quotes": [...],\n'
+            '   "subtopics": [...],\n'
+            '   "created_at": <unix_ts>, "updated_at": <unix_ts>,\n'
+            '   "updated_at_turn": <int>}\n\n'
+            "SLOT DEFINITIONS — fill each with concrete items drawn from the evicted "
+            "messages. Each slot is a list of strings. Leave a slot as [] when nothing "
+            "applies. Keep each item under 200 characters.\n\n"
+            "  facts:        Concrete statements preserving names, places, objects, "
+            "dates, numbers, or specific events. A fact MUST contain at least one "
+            "concrete noun, proper name, place, or number. Category labels like "
+            "'reflection traditions' or 'memories of her mother' are NOT facts — "
+            "they are topic titles and belong in the 'title' field, not here.\n"
+            "                Example: 'Jolene and her mother shared Saturday coffee on "
+            "the wooden bench in the backyard under the maple tree.'\n\n"
+            "  decisions:    Explicit commitments, choices, or plans the speakers made.\n"
+            "                Example: 'Jolene will restore the bench this summer.'\n\n"
+            "  preferences:  Stated likes, dislikes, values, or communication style.\n"
+            "                Example: 'Jolene prefers quiet mornings when discussing "
+            "her mom.'\n\n"
+            "  open_threads: Things raised but unresolved — the Active Agent should "
+            "revisit these.\n"
+            "                Example: 'Whether to keep or sell the family house.'\n\n"
+            "  quotes:       Verbatim excerpts worth preserving, with attribution "
+            'suffix " — <speaker>, turn <N>". Use for memorable or emotionally '
+            "charged statements that would lose meaning if paraphrased.\n"
+            "                Example: '\"Mom's voice still echoes out here.\" "
+            "— Jolene, turn 18'\n\n"
+            "RULES:\n"
+            "1. Merge new information into existing topics — do not create duplicate "
+            "topics that cover the same subject.\n"
+            "2. Use subtopics for specific sub-decisions or distinct threads under a "
+            "broader topic. Subtopic nodes have the same shape.\n"
+            f"3. The current turn count is {bucket._turn_count}. Set updated_at_turn "
+            "to this value for any node you create or modify.\n"
+            "4. Never delete existing topics or drop existing items from slots — only "
+            "update, extend, or add.\n"
+            "5. When extending an existing slot, append new items to the existing list.\n"
+            "6. Return ONLY the updated JSON object with a top-level \"topics\" array. "
             "No preamble, no commentary, no markdown fences."
         )
 

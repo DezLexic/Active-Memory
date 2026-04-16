@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Observer topic nodes now use typed slots.** The single prose `summary`
+  field on each node has been replaced with five typed slots: `facts`,
+  `decisions`, `preferences`, `open_threads`, and `quotes`. Each slot is a
+  list of concrete items, capped at 200 characters each. Context strings
+  rendered to the Active Agent preserve specific detail (names, places,
+  numbers, verbatim quotes) instead of collapsing into category labels.
+- Inspector "Topics" tab now renders topic nodes as structured cards with
+  per-slot labels and bullet lists, rather than dumping raw JSON.
+- Legacy `Bucket.summary` setter still works — the incoming prose is stored
+  as a single entry in the `facts` slot so old callers continue to render.
+
 ## [0.1.0] - 2026-04-15
 
 Initial public beta.

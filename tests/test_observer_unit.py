@@ -30,10 +30,14 @@ def _make_tree(*titles: str) -> dict:
             {
                 "id": t.lower().replace(" ", "_"),
                 "title": t,
-                "summary": f"Summary for {t}",
-                "subtopics": [],
-                "created_at": 1000000,
-                "updated_at": 1000000,
+                "facts":        [f"Concrete fact for {t}"],
+                "decisions":    [],
+                "preferences":  [],
+                "open_threads": [],
+                "quotes":       [],
+                "subtopics":    [],
+                "created_at":   1000000,
+                "updated_at":   1000000,
                 "updated_at_turn": 0,
             }
             for t in titles
@@ -115,7 +119,9 @@ class TestValidJsonResponse:
         assert len(bucket.topic_tree["topics"]) == 1
         assert bucket.topic_tree["topics"][0]["title"] == "Authentication"
         assert bucket.topic_tree["topics"][0]["id"] == "authentication"
-        assert "summary" in bucket.topic_tree["topics"][0]
+        # New typed-slot schema: every node should carry all five slot keys.
+        for slot in ("facts", "decisions", "preferences", "open_threads", "quotes"):
+            assert slot in bucket.topic_tree["topics"][0]
 
     def test_multiple_topics_stored(self):
         multi = _make_tree("Language", "Database")
@@ -274,10 +280,14 @@ class TestMarkdownFenceStripping:
                 {
                     "id": "code_example",
                     "title": "```code```",
-                    "summary": "A code example topic",
-                    "subtopics": [],
-                    "created_at": 1000000,
-                    "updated_at": 1000000,
+                    "facts":        ["A code example topic"],
+                    "decisions":    [],
+                    "preferences":  [],
+                    "open_threads": [],
+                    "quotes":       [],
+                    "subtopics":    [],
+                    "created_at":   1000000,
+                    "updated_at":   1000000,
                     "updated_at_turn": 0,
                 }
             ]

@@ -40,10 +40,14 @@ _OBSERVER_TREE = json.dumps({
     "topics": [{
         "id": "integration_topic",
         "title": "Integration Test Topic",
-        "summary": "A topic produced during integration testing.",
-        "subtopics": [],
-        "created_at": 0,
-        "updated_at": 0,
+        "facts":        ["A topic produced during integration testing."],
+        "decisions":    [],
+        "preferences":  [],
+        "open_threads": [],
+        "quotes":       [],
+        "subtopics":    [],
+        "created_at":   0,
+        "updated_at":   0,
         "updated_at_turn": 0,
     }]
 })
