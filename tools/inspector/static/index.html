@@ -734,6 +734,28 @@
           <h3>Agent Response</h3>
           <pre class="dump">${escapeHtml(q.response)}</pre>
         </div>
+        <div class="detail-section">
+          <h3>Surfaced Memories (${(q.retrieved || []).length})</h3>
+          ${(q.retrieved || []).length === 0
+            ? '<div class="empty">No memories retrieved for this question.</div>'
+            : (q.retrieved || []).map(m => {
+                const sim = (m.similarity || 0);
+                const pct = (sim * 100).toFixed(0);
+                const tier = m.tier || "warm";
+                return `
+                  <div class="mem">
+                    <div class="meta">
+                      <span class="tier ${tier}">${tier}</span>
+                      <span>sim ${sim.toFixed(3)} (${pct}%)</span>
+                      <div class="bar"><div style="width:${pct}%"></div></div>
+                      <span>retrievals: ${m.retrieval_count || 0}</span>
+                    </div>
+                    <div>${escapeHtml(m.content || "")}</div>
+                  </div>
+                `;
+              }).join("")
+          }
+        </div>
       `;
     }
 
