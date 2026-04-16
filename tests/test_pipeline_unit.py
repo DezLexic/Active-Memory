@@ -32,7 +32,14 @@ from tests.conftest import FakeBackend
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 _CURATOR_OK = '{"store": false, "reason": "unit test", "tier": "warm"}'
-_OBS_REPLY  = '{"topics": [{"id": "obs_update", "title": "Observer update", "summary": "Updated.", "subtopics": [], "created_at": 0, "updated_at": 0, "updated_at_turn": 0}]}'
+_OBS_REPLY  = (
+    '{"topics": [{'
+    '"id": "obs_update", "title": "Observer update", '
+    '"facts": ["Updated."], "decisions": [], "preferences": [], '
+    '"open_threads": [], "quotes": [], '
+    '"subtopics": [], "created_at": 0, "updated_at": 0, "updated_at_turn": 0'
+    '}]}'
+)
 
 
 def _pipeline(tmp_path, *, max_recent=10, batch_reduction=5,

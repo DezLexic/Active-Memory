@@ -324,6 +324,61 @@
       font-size: 12px;
       padding: 14px 4px;
     }
+
+    /* ── Topic tree cards ────────────────────────────────────────────── */
+    .topic-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .topic-card .topic-head {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .topic-card .topic-title {
+      font-weight: 600;
+      color: var(--text);
+    }
+    .topic-card .topic-age {
+      font-size: 10px;
+      color: var(--muted);
+      margin-left: auto;
+    }
+    .topic-card .slot {
+      margin-top: 6px;
+    }
+    .topic-card .slot-label {
+      display: inline-block;
+      font-size: 10px;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: var(--panel-2);
+      color: var(--accent);
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+    .topic-card .slot-items {
+      margin: 4px 0 0 4px;
+      padding-left: 14px;
+      color: var(--text);
+    }
+    .topic-card .slot-items li {
+      margin: 2px 0;
+    }
+    .topic-indent {
+      margin-left: 16px;
+      margin-top: 6px;
+      padding-left: 8px;
+      border-left: 2px solid var(--border);
+    }
   </style>
 </head>
 <body>
@@ -406,12 +461,12 @@
 
       <div class="tab-pane" id="tab-topics">
         <div class="detail-section">
-          <h3>Flattened Topic Summary</h3>
-          <pre class="dump" id="topic-summary">(none)</pre>
+          <h3>Topic Tree</h3>
+          <div id="topic-tree-cards" class="empty">No topics yet.</div>
         </div>
         <div class="detail-section">
-          <h3>Raw Topic Tree</h3>
-          <pre class="dump" id="topic-tree">{}</pre>
+          <h3>Flattened Topic Summary <span style="text-transform:none;color:var(--muted);font-weight:400;font-size:11px;">— as the Active Agent sees it</span></h3>
+          <pre class="dump" id="topic-summary">(none)</pre>
         </div>
       </div>
 
@@ -656,11 +711,70 @@
       `).join("");
     }
 
+    const _TOPIC_SLOTS = [
+      ["facts",        "Facts"],
+      ["decisions",    "Decisions"],
+      ["preferences",  "Preferences"],
+      ["open_threads", "Open threads"],
+      ["quotes",       "Quotes"],
+    ];
+
+    function renderTopicCard(topic, turnCount) {
+      const updatedAt = topic.updated_at_turn || 0;
+      const turnsAgo  = Math.max(0, (turnCount || 0) - updatedAt);
+      const ageText   = `${turnsAgo} turn${turnsAgo === 1 ? "" : "s"} ago`;
+
+      const slotsHtml = _TOPIC_SLOTS.map(([key, label]) => {
+        const items = Array.isArray(topic[key]) ? topic[key] : [];
+        if (!items.length) return "";
+        const bullets = items.map(it => `<li>${escapeHtml(String(it))}</li>`).join("");
+        return `
+          <div class="slot">
+            <span class="slot-label">${label}</span>
+            <ul class="slot-items">${bullets}</ul>
+          </div>
+        `;
+      }).join("");
+
+      const subtopics = Array.isArray(topic.subtopics) ? topic.subtopics : [];
+      const subHtml = subtopics.length
+        ? `<div class="topic-indent">${
+            subtopics.map(st => renderTopicCard(st, turnCount)).join("")
+          }</div>`
+        : "";
+
+      return `
+        <div class="topic-card">
+          <div class="topic-head">
+            <span class="topic-title">${escapeHtml(topic.title || "(untitled)")}</span>
+            <span class="topic-age">updated ${ageText}</span>
+          </div>
+          ${slotsHtml}
+          ${subHtml}
+        </div>
+      `;
+    }
+
     function renderTopics(snap) {
       document.getElementById("topic-summary").textContent =
         snap.topic_summary || "(none yet)";
-      document.getElementById("topic-tree").textContent =
-        JSON.stringify(snap.topic_tree, null, 2);
+
+      const el = document.getElementById("topic-tree-cards");
+      const tree  = snap.topic_tree || {};
+      const tops  = Array.isArray(tree.topics) ? tree.topics : [];
+      // turn_count isn't in the snapshot payload today — fall back to the
+      // largest updated_at_turn so ages render as 0 for the newest node.
+      const turnCount = tops.reduce(
+        (m, t) => Math.max(m, t.updated_at_turn || 0), 0
+      );
+
+      if (!tops.length) {
+        el.className = "empty";
+        el.textContent = "No topics yet.";
+        return;
+      }
+      el.className = "";
+      el.innerHTML = tops.map(t => renderTopicCard(t, turnCount)).join("");
     }
 
     function renderRetrieved(snap) {

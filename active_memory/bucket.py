@@ -93,6 +93,15 @@ class Bucket:
         self._flatten_topics(self.topic_tree["topics"], lines, depth=0)
         return "\n\n".join(lines)
 
+    # Slot name -> rendered label, in the order they appear in flattened output.
+    _SLOT_LABELS = (
+        ("facts",        "Facts"),
+        ("decisions",    "Decisions"),
+        ("preferences",  "Preferences"),
+        ("open_threads", "Open threads"),
+        ("quotes",       "Quotes"),
+    )
+
     def _flatten_topics(self, topics: list[dict], lines: list[str], depth: int) -> None:
         indent = "  " * depth
         label = "Subtopic" if depth > 0 else "Topic"
@@ -100,8 +109,21 @@ class Bucket:
             turns_ago = self._turn_count - t.get("updated_at_turn", 0)
             ago_text = f"{turns_ago} turn{'s' if turns_ago != 1 else ''} ago"
             header = f"{indent}[{label}: {t['title']} — updated {ago_text}]"
-            body = f"{indent}{t.get('summary', '')}"
-            lines.append(f"{header}\n{body}")
+
+            body_lines: list[str] = []
+            for slot, slot_label in self._SLOT_LABELS:
+                items = t.get(slot) or []
+                if not items:
+                    continue
+                body_lines.append(f"{indent}  {slot_label}:")
+                for item in items:
+                    body_lines.append(f"{indent}    • {item}")
+
+            if body_lines:
+                lines.append(header + "\n" + "\n".join(body_lines))
+            else:
+                lines.append(header)
+
             if t.get("subtopics"):
                 self._flatten_topics(t["subtopics"], lines, depth + 1)
 
@@ -112,16 +134,26 @@ class Bucket:
 
     @summary.setter
     def summary(self, value: str) -> None:
-        """Deprecated setter — wraps string into a single-topic node."""
+        """Deprecated setter — wraps string into a single-topic node.
+
+        The incoming prose is stored as a single entry in the ``facts`` slot
+        so that legacy callers still get their text rendered under the new
+        typed-slot schema.
+        """
         if value and value.strip():
+            now = int(time.time())
             self.topic_tree = {
                 "topics": [{
                     "id": "legacy_summary",
                     "title": "Conversation summary",
-                    "summary": value.strip(),
-                    "subtopics": [],
-                    "created_at": int(time.time()),
-                    "updated_at": int(time.time()),
+                    "facts":        [value.strip()],
+                    "decisions":    [],
+                    "preferences":  [],
+                    "open_threads": [],
+                    "quotes":       [],
+                    "subtopics":    [],
+                    "created_at":   now,
+                    "updated_at":   now,
                     "updated_at_turn": self._turn_count,
                 }]
             }
