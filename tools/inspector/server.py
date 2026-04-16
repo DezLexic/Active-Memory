@@ -273,27 +273,30 @@ def _run_benchmark(conv_idx: int) -> None:
             if not _check_pause():
                 return
             # Reset Curator decision so we can tell which turn produced the
-            # next "stored / dropped" line. Curator only runs on eviction,
-            # so most turns will leave these None (no log line emitted).
+            # next warm-promotion line. Curator only runs on eviction.
             _pipeline._curator._last_store  = None
             _pipeline._curator._last_reason = None
             _pipeline._curator._last_tier   = None
+            count_before = _pipeline.retrieval._collection.count()
             _pipeline.ingest(u, a)
+            count_after  = _pipeline.retrieval._collection.count()
             with _state_lock:
                 _state["progress"]["pairs_done"] = i
                 _state["snapshot"] = _snapshot(_pipeline)
-                _log(f"ingested pair {i}/{len(pairs)}")
-                # Surface Curator decisions so silent store=false isn't
-                # indistinguishable from Curator never running.
+                cold_added = count_after - count_before
+                if cold_added > 0:
+                    _log(
+                        f"ingested pair {i}/{len(pairs)} — "
+                        f"auto-cold'd {cold_added} evicted pair(s), "
+                        f"total stored: {count_after}"
+                    )
+                else:
+                    _log(f"ingested pair {i}/{len(pairs)}")
+                # Surface warm-promotion decisions from the Curator.
                 cur = _pipeline._curator
                 if cur._last_store is True:
                     _log(
-                        f"  -> curator STORED ({cur._last_tier or 'warm'}): "
-                        f"{cur._last_reason or '(no reason)'}"
-                    )
-                elif cur._last_store is False:
-                    _log(
-                        f"  -> curator dropped: "
+                        f"  -> curator promoted to {cur._last_tier or 'warm'}: "
                         f"{cur._last_reason or '(no reason)'}"
                     )
 
