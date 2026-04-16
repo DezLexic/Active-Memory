@@ -1,23 +1,24 @@
 """
 curator.py
 
-Evaluates an evicted message pair and stores it in Chroma if it is worth
-remembering.  Runs after the Active Agent responds -- the user never waits
-for it.
+Evaluates the stable mid-stack conversation pair (the one near the eviction
+boundary) and assigns it to the correct memory tier.  This runs after
+Pipeline has already auto-stored the full evicted batch to cold storage.
 
-The Curator receives only the popped pair -- no summary, no external context.
-The prompt is direct: does this exchange contain an explicit decision, hard
-constraint, or established preference?  If yes, store it.  If the content is
-ambiguous or seems incomplete on its own, do not store it.  Be conservative --
-when in doubt, drop it.
+The Curator's job is NOT to decide whether to store — Pipeline already
+handles that.  It decides whether the peeked pair deserves *warm* priority
+(frequent access, surfaced before cold results) vs *cold* (background
+reference, surfaced only when directly relevant).
 
-The model is asked to return a JSON object:
+Warm = explicit decision, hard constraint, or active preference the agent
+will likely need soon.  Cold = everything else.
 
-    {"store": true/false, "reason": "<one sentence>"}
+The model returns:
 
-If store is true the pair is written to the Retrieval instance using the
-current UTC timestamp.  Malformed JSON is caught and logged; on parse
-failure the pair is not stored.
+    {"store": true, "reason": "<one sentence>", "tier": "warm"|"cold"}
+
+"store" is always true in the new framing; on parse failure the pair is
+stored as cold (the safe default) rather than dropped silently.
 """
 
 from __future__ import annotations
@@ -35,16 +36,21 @@ logger = logging.getLogger(__name__)
 
 class Curator:
     """
-    Agent that decides whether an evicted Q/A pair is worth persisting to
-    the vector store.
+    Agent that assigns the mid-stack conversation pair to warm or cold tier.
+
+    Pipeline auto-stores the full evicted batch to cold storage before
+    calling Curator.  Curator's role is warm promotion: it decides whether
+    the peeked mid-stack pair deserves warm priority over the cold entries
+    that were already written.
 
     Parameters
     ----------
     backend         Any LLMBackend-conforming object.
     retrieval       A Retrieval instance that owns the Chroma collection.
     use_batch_mode  When True, Pipeline passes the single pair returned by
-                    bucket.peek_curator_target() rather than every evicted
-                    pair.  Default True.
+                    bucket.peek_curator_target() for warm-promotion evaluation.
+                    When False, Pipeline passes every evicted pair (legacy
+                    behaviour).  Default True.
     """
 
     def __init__(
@@ -61,15 +67,15 @@ class Curator:
 
     def evaluate(self, popped_pair: dict[str, str]) -> None:
         """
-        Evaluate a popped Q/A pair and store it in Chroma if worthwhile.
+        Evaluate a Q/A pair and store it to warm or cold in Chroma.
 
         Steps
         -----
-        1. Build a prompt from the pair alone.
-        2. Make one LLM call to judge whether the pair contains an explicit
-           decision, hard constraint, or established preference.
+        1. Build a triage prompt from the pair.
+        2. Make one LLM call to decide warm vs cold tier.
         3. Parse the JSON response.
-        4. If store is true, write to Chroma via retrieval.store().
+        4. Store to the appropriate tier via retrieval.store().
+           On parse failure: defaults to cold (safe fallback, never drops).
 
         Parameters
         ----------
@@ -80,21 +86,25 @@ class Curator:
         combined = f"{question} {response}"
 
         prompt = (
-            "You are deciding whether a conversation exchange is worth storing "
-            "as a long-term memory.\n\n"
+            "You are assigning a conversation exchange to the right memory "
+            "tier.\n\n"
             f"QUESTION:\n{question}\n\n"
             f"RESPONSE:\n{response}\n\n"
-            "Store it only if this exchange, on its own, contains an explicit "
-            "decision, a hard constraint, or an established preference.\n"
-            "If the content is ambiguous or seems incomplete without additional "
-            "context, do not store it. Be conservative -- when in doubt, drop it.\n\n"
-            "Also decide which tier this memory belongs in.\n"
-            "Warm is for recent decisions, active constraints, and preferences "
-            "likely needed soon.\n"
-            "Cold is for older context, background information, and decisions "
-            "unlikely to be revisited soon.\n\n"
+            "This exchange WILL be stored. Your only job is to decide the "
+            "tier.\n\n"
+            "WARM — use when the exchange contains:\n"
+            "  • An explicit decision or commitment (\"we will\", \"agreed\", "
+            "\"decided\")\n"
+            "  • A hard constraint or requirement (\"must\", \"never\", "
+            "\"required\", \"non-negotiable\")\n"
+            "  • An active preference the assistant will likely need in a "
+            "future turn\n\n"
+            "COLD — use for everything else:\n"
+            "  • Personal facts, stories, feelings, emotions, opinions\n"
+            "  • Background information, descriptions, casual context\n"
+            "  • When in doubt, cold.\n\n"
             "Respond with a JSON object containing exactly three fields:\n"
-            "  store  : boolean\n"
+            "  store  : true\n"
             "  reason : one sentence\n"
             "  tier   : \"warm\" or \"cold\"\n\n"
             "Respond with only the JSON object. No preamble, no commentary."
@@ -104,7 +114,15 @@ class Curator:
             with ProcessMonitor("curator evaluating pair"):
                 raw_text = self._backend.chat([{"role": "user", "content": prompt}])
         except Exception as exc:
-            logger.error("Curator: LLM call failed (%s); pair not stored.", exc)
+            logger.error(
+                "Curator: LLM call failed (%s); storing as cold.", exc
+            )
+            # Safe fallback: cold rather than drop.
+            if self._retrieval is not None:
+                self._retrieval.store(combined, float(time.time()), tier="cold")
+            self._last_store  = True
+            self._last_reason = f"(LLM failure — stored as cold: {exc})"
+            self._last_tier   = "cold"
             return
 
         try:
@@ -121,13 +139,22 @@ class Curator:
             if isinstance(parsed, list):
                 parsed = parsed[0] if parsed else {}
 
-            store  = bool(parsed.get("store", False))
+            store  = bool(parsed.get("store", True))   # default True — always store
             reason = str(parsed.get("reason", ""))
-            tier   = str(parsed.get("tier", "warm")).lower().strip()
+            tier   = str(parsed.get("tier", "cold")).lower().strip()
             if tier not in ("warm", "cold"):
-                tier = "warm"
+                tier = "cold"
         except (json.JSONDecodeError, KeyError, IndexError) as exc:
-            logger.warning("Curator: JSON parse error (%s); raw=%r; pair not stored.", exc, raw_text)
+            logger.warning(
+                "Curator: JSON parse error (%s); raw=%r; storing as cold.",
+                exc, raw_text,
+            )
+            # Safe fallback: cold rather than drop.
+            if self._retrieval is not None:
+                self._retrieval.store(combined, float(time.time()), tier="cold")
+            self._last_store  = True
+            self._last_reason = "(JSON parse failure — stored as cold)"
+            self._last_tier   = "cold"
             return
 
         if store and self._retrieval is not None:
@@ -137,7 +164,7 @@ class Curator:
         # Surface the decision for callers / test scripts that want visibility.
         self._last_store  = store
         self._last_reason = reason
-        self._last_tier   = tier if store else None
+        self._last_tier   = tier
 
     # ── Dunder helpers ─────────────────────────────────────────────────────────
 

@@ -142,33 +142,43 @@ class TestJsonParsing:
         curator.evaluate(_CLEAR_DECISION)
         assert len(retrieval.get_all_metadata()) == 1
 
-    def test_malformed_json_does_not_crash(self, tmp_path):
+    def test_malformed_json_stores_as_cold_not_drop(self, tmp_path):
+        """Parse failure must store as cold — never silently drop the pair."""
         curator, retrieval = _curator(tmp_path, "not valid json at all")
         curator.evaluate(_CLEAR_DECISION)   # must not raise
-        assert len(retrieval.retrieve("database")) == 0
+        meta = retrieval.get_all_metadata()
+        assert len(meta) == 1
+        assert meta[0]["tier"] == "cold"
+        assert curator._last_store is True
+        assert curator._last_tier == "cold"
 
-    def test_invalid_tier_defaults_to_warm(self, tmp_path):
+    def test_invalid_tier_defaults_to_cold(self, tmp_path):
+        """An unrecognised tier string should fall back to cold, not warm."""
         curator, retrieval = _curator(
             tmp_path,
             '{"store": true, "reason": "decision", "tier": "unknown"}'
         )
         curator.evaluate(_CLEAR_DECISION)
         meta = retrieval.get_all_metadata()
-        assert meta[0]["tier"] == "warm"
+        assert meta[0]["tier"] == "cold"
 
-    def test_missing_tier_field_defaults_to_warm(self, tmp_path):
+    def test_missing_tier_field_defaults_to_cold(self, tmp_path):
+        """Missing tier key should default to cold."""
         curator, retrieval = _curator(
             tmp_path,
             '{"store": true, "reason": "decision"}'
         )
         curator.evaluate(_CLEAR_DECISION)
         meta = retrieval.get_all_metadata()
-        assert meta[0]["tier"] == "warm"
+        assert meta[0]["tier"] == "cold"
 
-    def test_empty_array_response_does_not_crash(self, tmp_path):
+    def test_empty_array_response_stores_as_cold(self, tmp_path):
+        """Empty JSON array → parsed={} → store=True (default), tier=cold."""
         curator, retrieval = _curator(tmp_path, "[]")
-        curator.evaluate(_CLEAR_DECISION)  # parsed={} → store=False
-        assert len(retrieval.retrieve("database")) == 0
+        curator.evaluate(_CLEAR_DECISION)
+        meta = retrieval.get_all_metadata()
+        assert len(meta) == 1
+        assert meta[0]["tier"] == "cold"
 
 
 # ── retrieval=None ────────────────────────────────────────────────────────────
@@ -187,7 +197,8 @@ class TestNoRetrieval:
 
 class TestLLMFailure:
 
-    def test_exception_in_backend_does_not_crash_curator(self, tmp_path):
+    def test_exception_in_backend_stores_as_cold(self, tmp_path):
+        """LLM call failure must store as cold — never silently drop the pair."""
         class ErrorBackend:
             def chat(self, messages):
                 raise RuntimeError("Connection refused")
@@ -197,7 +208,11 @@ class TestLLMFailure:
         retrieval = Retrieval(chroma_path=str(tmp_path))
         curator   = Curator(backend=ErrorBackend(), retrieval=retrieval)
         curator.evaluate(_CLEAR_DECISION)  # must not raise
-        assert len(retrieval.retrieve("database")) == 0
+        meta = retrieval.get_all_metadata()
+        assert len(meta) == 1
+        assert meta[0]["tier"] == "cold"
+        assert curator._last_store is True
+        assert curator._last_tier == "cold"
 
 
 # ── use_batch_mode flag ───────────────────────────────────────────────────────

@@ -31,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to match the realistic behaviour of Chroma's default MiniLM embedder on
   paraphrased queries. Tests pin their own thresholds explicitly, so
   this is a default-only change with no test impact.
+- **Curator is now a triage system, not a gatekeeper.** All evicted
+  conversation pairs are automatically written to cold storage in
+  `Pipeline.update()` and `Pipeline.ingest()` without any LLM call —
+  guaranteeing full conversation recall coverage. The Curator's single
+  LLM call per eviction now decides warm-vs-cold for the peeked mid-stack
+  pair only, promoting decisions and constraints to warm priority. The
+  default fallback on Curator parse failure or LLM error changes from
+  `store=false` (silent drop) to `store=true, tier=cold`.
 
 ## [0.1.0] - 2026-04-15
 
