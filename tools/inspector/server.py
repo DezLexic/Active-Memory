@@ -54,6 +54,14 @@ logging.basicConfig(
     format="%(asctime)s  %(name)s  %(levelname)s  %(message)s",
 )
 
+# Suppress the every-2-second "/api/state" poll lines from uvicorn's access
+# log — they drown out the Curator and retrieval messages that matter.
+class _SuppressStatePoll(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "GET /api/state" not in record.getMessage()
+
+logging.getLogger("uvicorn.access").addFilter(_SuppressStatePoll())
+
 # ── Path setup — let the server import active_memory and loader.py ───────────
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
