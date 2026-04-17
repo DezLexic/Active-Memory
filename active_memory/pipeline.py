@@ -239,6 +239,21 @@ class Pipeline:
                 combined = f"{pair['question']} {pair['response']}"
                 self._retrieval.store(combined, tier=tier)
 
+    def ingest_window_only(self, question: str, response: str) -> None:
+        """
+        Advance the sliding window only — no Observer, Curator, or Chroma writes.
+
+        Intended for vanilla-mode benchmarking where memory storage is
+        intentionally disabled so that results can be compared against the
+        full Active Memory pipeline on the same conversation data.
+
+        Parameters
+        ----------
+        question   The user turn of the pair.
+        response   The assistant turn of the pair.
+        """
+        self._bucket.push_message(question, response)
+
     # ── Accessors ──────────────────────────────────────────────────────────────
 
     @property

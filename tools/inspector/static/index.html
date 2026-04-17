@@ -439,6 +439,78 @@
       padding-left: 8px;
       border-left: 2px solid var(--border);
     }
+
+    /* ── Results tab ────────────────────────────────────────────────── */
+    .results-score-big {
+      font-family: var(--mono);
+      font-size: 38px;
+      font-weight: 700;
+      color: var(--accent);
+      text-align: center;
+      padding: 14px 0 4px;
+    }
+    .results-score-label {
+      text-align: center;
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 16px;
+    }
+    .results-stat-row {
+      display: flex;
+      justify-content: space-between;
+      font-family: var(--mono);
+      font-size: 12px;
+      padding: 4px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .results-stat-row .k { color: var(--muted); }
+    .dist-bar-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--mono);
+      font-size: 12px;
+      margin: 3px 0;
+    }
+    .dist-bar-row .score-label { width: 20px; color: var(--muted); text-align: right; }
+    .dist-bar-outer {
+      flex: 1;
+      height: 12px;
+      background: var(--panel-2);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .dist-bar-inner { height: 100%; background: var(--accent); transition: width .3s; }
+    .dist-bar-count { width: 28px; text-align: right; }
+    .history-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+    .history-table th {
+      text-align: left;
+      color: var(--muted);
+      font-weight: 600;
+      padding: 4px 6px;
+      border-bottom: 1px solid var(--border);
+      text-transform: uppercase;
+      letter-spacing: .4px;
+    }
+    .history-table td { padding: 5px 6px; border-bottom: 1px solid var(--border); }
+    .history-table tr.h-row { cursor: pointer; }
+    .history-table tr.h-row:hover td { background: var(--panel); }
+    .history-table tr.h-row.selected td { background: var(--panel-2); }
+    .mode-badge {
+      display: inline-block;
+      font-size: 10px;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: var(--panel-2);
+      color: var(--muted);
+    }
+    .mode-badge.vanilla { color: var(--warm); }
+    .mode-badge.active  { color: var(--accent); }
   </style>
 </head>
 <body>
@@ -460,7 +532,7 @@
       <select id="conv-select"></select>
 
       <div class="mode-toggle" style="margin-top:10px;">
-        <input type="radio" name="mode" id="mode-active"   value="active"  checked />
+        <input type="radio" name="mode" id="mode-active"   value="active_memory"  checked />
         <label for="mode-active">Active Memory</label>
         <input type="radio" name="mode" id="mode-vanilla"  value="vanilla" />
         <label for="mode-vanilla">Vanilla</label>
@@ -499,6 +571,7 @@
       <div class="tabs" id="mid-tabs">
         <button data-tab="turns"     class="active">Turns</button>
         <button data-tab="questions">Questions</button>
+        <button data-tab="results">Results</button>
       </div>
 
       <div class="tab-pane active" id="tab-turns">
@@ -507,6 +580,18 @@
 
       <div class="tab-pane" id="tab-questions">
         <div id="questions-list" class="empty">No questions answered yet.</div>
+      </div>
+
+      <div class="tab-pane" id="tab-results">
+        <div id="results-current">
+          <div class="empty">No results yet — run a benchmark first.</div>
+        </div>
+        <div style="margin-top:20px">
+          <h2 style="font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:0 0 8px">Run History</h2>
+          <div id="results-history">
+            <div class="empty">No past runs found.</div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -1037,9 +1122,97 @@
       pollState();
     });
 
+    // ── Results tab ──────────────────────────────────────────────────
+    let SELECTED_HISTORY_IDX = null;
+    let LAST_RESULTS = {
+      current: {total_count:0, avg_score:0, scored_count:0, failed_count:0,
+                per_category:{}, score_dist:{}, status:"idle", phase:null},
+      history: []
+    };
+
+    function renderResults(current, history) {
+      const el = document.getElementById("results-current");
+      const total = current.total_count || 0;
+      if (!total) {
+        el.innerHTML = '<div class="empty">No results yet — run a benchmark first.</div>';
+      } else {
+        const avg  = (current.avg_score || 0).toFixed(2);
+        const dist = current.score_dist || {};
+        const vals = [1,2,3,4,5].map(s => Number(dist[s] || dist[String(s)] || 0));
+        const maxD = Math.max(...vals, 1);
+        const bars = [1,2,3,4,5].map((s, i) => {
+          const c = vals[i];
+          return `<div class="dist-bar-row">
+            <span class="score-label">${s}</span>
+            <div class="dist-bar-outer">
+              <div class="dist-bar-inner" style="width:${(c/maxD*100).toFixed(0)}%"></div>
+            </div>
+            <span class="dist-bar-count">${c}</span>
+          </div>`;
+        }).join("");
+        const catEntries = Object.entries(current.per_category || {});
+        const cats = catEntries.length
+          ? catEntries.map(([k,v]) =>
+              `<div class="results-stat-row">
+                <span class="k">${escapeHtml(k)}</span>
+                <span>${(+v).toFixed(2)}</span>
+              </div>`).join("")
+          : '<div class="empty">No categories yet.</div>';
+        el.innerHTML = `
+          <div class="results-score-big">${avg}</div>
+          <div class="results-score-label">avg score &mdash; ${current.scored_count} scored,
+            ${current.failed_count} judge failures</div>
+          <div style="margin-bottom:14px">${bars}</div>
+          <h2 style="font-size:11px;text-transform:uppercase;letter-spacing:.6px;
+            color:var(--muted);margin:0 0 6px">Per Category</h2>
+          ${cats}`;
+      }
+
+      const hel = document.getElementById("results-history");
+      if (!history || !history.length) {
+        hel.innerHTML = '<div class="empty">No past runs found.</div>';
+        return;
+      }
+      const rows = history.map((r, i) => {
+        const ts  = (r.timestamp || "").replace("T", " ").slice(0, 16);
+        const m   = r.mode === "vanilla" ? "vanilla" : "active";
+        const lbl = r.mode === "vanilla" ? "Vanilla" : "Active";
+        const sel = SELECTED_HISTORY_IDX === i ? "selected" : "";
+        return `<tr class="h-row ${sel}" data-hidx="${i}">
+          <td>${escapeHtml(ts)}</td>
+          <td>${escapeHtml(r.conv_id || "—")}</td>
+          <td><span class="mode-badge ${m}">${lbl}</span></td>
+          <td>${(r.avg_score || 0).toFixed(2)}</td>
+          <td>${r.scored_count || 0}</td>
+        </tr>`;
+      }).join("");
+      hel.innerHTML = `<table class="history-table">
+        <thead><tr>
+          <th>Date</th><th>Conv</th><th>Mode</th><th>Avg</th><th>Qs</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+      hel.querySelectorAll(".h-row").forEach(row => {
+        row.addEventListener("click", () => {
+          SELECTED_HISTORY_IDX = parseInt(row.dataset.hidx);
+          renderResults(LAST_RESULTS.current, LAST_RESULTS.history);
+        });
+      });
+    }
+
+    async function pollResults() {
+      try {
+        const r = await fetch("/api/results");
+        if (!r.ok) return;
+        LAST_RESULTS = await r.json();
+        renderResults(LAST_RESULTS.current, LAST_RESULTS.history);
+      } catch(e) { /* ignore transient errors */ }
+    }
+
     // ── Bootstrap ────────────────────────────────────────────────────
-    loadConversations().then(pollState);
-    setInterval(pollState, 2000);
+    loadConversations().then(() => { pollState(); pollResults(); });
+    setInterval(pollState,   2000);
+    setInterval(pollResults, 2000);
   </script>
 </body>
 </html>

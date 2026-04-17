@@ -53,3 +53,6 @@ benchmarks/contexts/niah_chat_*.py
 
 # LoCoMo dataset — clone from https://github.com/snap-research/locomo
 benchmarks/locomo/data/
+
+# Inspector run history — generated at runtime, not tracked
+tools/inspector/results/

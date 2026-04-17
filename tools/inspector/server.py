@@ -58,7 +58,8 @@ logging.basicConfig(
 # log — they drown out the Curator and retrieval messages that matter.
 class _SuppressStatePoll(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        return "GET /api/state" not in record.getMessage()
+        msg = record.getMessage()
+        return "GET /api/state" not in msg and "GET /api/results" not in msg
 
 logging.getLogger("uvicorn.access").addFilter(_SuppressStatePoll())
 
@@ -90,13 +91,16 @@ CHROMA_PATH_TEMPLATE = "./chroma_db_inspector_{idx}"
 
 LOG_TAIL_MAX = 200
 
+RESULTS_DIR = _REPO_ROOT / "tools" / "inspector" / "results"
+RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
 
 # ── Global state ─────────────────────────────────────────────────────────────
 
 def _idle_state() -> dict[str, Any]:
     return {
-        "status":    "idle",   # idle | running | paused | done | error
-        "mode":      "active", # "active" | "vanilla"
+        "status":    "idle",           # idle | running | paused | done | error
+        "mode":      "active_memory",  # "active_memory" | "vanilla"
         "conv_idx":  None,
         "conv_id":   None,
         "phase":     None,     # "ingest" | "qa" | None
@@ -120,6 +124,32 @@ _pause_event.set()
 _stop_flag    = threading.Event()
 _thread:   threading.Thread | None = None
 _pipeline: Pipeline | None = None
+
+# ── Run-history cache ─────────────────────────────────────────────────────────
+# Loaded from RESULTS_DIR at startup; appended on each completed run.
+# In-memory cache stores summary-only records (no questions list) for fast polling.
+
+_run_history: list[dict[str, Any]] = []
+_history_lock = threading.Lock()
+
+
+def _load_history() -> None:
+    """Load summary records from RESULTS_DIR into _run_history (newest-first)."""
+    global _run_history
+    records: list[dict[str, Any]] = []
+    for path in sorted(RESULTS_DIR.glob("*.json"), reverse=True):
+        try:
+            import json as _json
+            with open(path, encoding="utf-8") as f:
+                r = _json.load(f)
+            records.append({k: v for k, v in r.items() if k != "questions"})
+        except Exception:
+            pass  # corrupt file — skip silently
+    with _history_lock:
+        _run_history = records
+
+
+_load_history()
 
 
 # ── Helpers — copied (not imported) from benchmark_locomo.py ─────────────────
@@ -324,15 +354,15 @@ def _run_benchmark(conv_idx: int, mode: str = "active") -> None:
             if not _check_pause():
                 return
 
-            if mode == "active":
-                ctx       = _pipeline.build_context(q.question)
-                retrieved = copy.deepcopy(_pipeline._bucket.memories)
-                response  = _pipeline._backend.chat(ctx)
-            else:  # vanilla — bare model call, no memory injection
+            if mode == "vanilla":
                 retrieved = []
                 response  = _pipeline._backend.chat(
                     [{"role": "user", "content": q.question}]
                 )
+            else:  # active_memory — full memory-augmented context
+                ctx       = _pipeline.build_context(q.question)
+                retrieved = copy.deepcopy(_pipeline._bucket.memories)
+                response  = _pipeline._backend.chat(ctx)
             score     = _judge(q.question, q.answer, response,
                                model=DEFAULT_MODEL, base_url=AGENT_URL)
 
@@ -364,6 +394,7 @@ def _run_benchmark(conv_idx: int, mode: str = "active") -> None:
                         f"retrieved 0 mems"
                     )
 
+        _save_run(copy.deepcopy(_state))
         with _state_lock:
             _state["status"] = "done"
             _state["phase"]  = None
@@ -376,7 +407,76 @@ def _run_benchmark(conv_idx: int, mode: str = "active") -> None:
             _log(f"ERROR: {exc}")
 
 
-def _spawn(conv_idx: int, mode: str = "active") -> None:
+def _compute_results(state: dict[str, Any]) -> dict[str, Any]:
+    """Compute a summary of Q&A scores from the given state snapshot."""
+    qs     = state.get("questions", [])
+    scored = [q for q in qs if q["score"] > 0]
+    failed = [q for q in qs if q["score"] == 0]
+    avg    = (sum(q["score"] for q in scored) / len(scored)) if scored else 0.0
+
+    dist: dict[str, int] = {str(i): 0 for i in range(1, 6)}
+    for q in scored:
+        dist[str(q["score"])] += 1
+
+    per_cat: dict[str, dict[str, int]] = {}
+    for q in qs:
+        e = per_cat.setdefault(q["category"], {"n": 0, "s": 0})
+        if q["score"] > 0:
+            e["n"] += 1
+            e["s"] += q["score"]
+    per_cat_avg = {
+        c: round(v["s"] / v["n"], 4) if v["n"] else 0.0
+        for c, v in per_cat.items()
+    }
+
+    return {
+        "conv_id":      state.get("conv_id"),
+        "conv_idx":     state.get("conv_idx"),
+        "mode":         state.get("mode", "active_memory"),
+        "avg_score":    round(avg, 4),
+        "scored_count": len(scored),
+        "failed_count": len(failed),
+        "total_count":  len(qs),
+        "per_category": per_cat_avg,
+        "score_dist":   dist,
+    }
+
+
+def _save_run(state: dict[str, Any]) -> None:
+    """Atomically write a completed run record to RESULTS_DIR and update the cache."""
+    import json as _json
+    import tempfile
+
+    summary = _compute_results(state)
+    record  = dict(summary)
+    record["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    record["questions"] = state.get("questions", [])
+
+    conv_id = (state.get("conv_id") or "unknown").replace("/", "-")
+    mode    = state.get("mode", "active_memory")
+    ts      = record["timestamp"].replace(":", "-")
+    dest    = RESULTS_DIR / f"{conv_id}_{mode}_{ts}.json"
+
+    # Atomic write: temp file on same volume then rename.
+    fd, tmp_path = tempfile.mkstemp(dir=RESULTS_DIR, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            _json.dump(record, f, indent=2)
+        os.replace(tmp_path, dest)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+    # Prepend summary (no questions list) to the in-memory history cache.
+    summary_only = {k: v for k, v in record.items() if k != "questions"}
+    with _history_lock:
+        _run_history.insert(0, summary_only)
+
+
+def _spawn(conv_idx: int, mode: str = "active_memory") -> None:
     """Start a fresh benchmark thread.  Caller must ensure no thread is alive."""
     global _thread
     _stop_flag.clear()
@@ -417,7 +517,7 @@ app.mount("/static", StaticFiles(directory=STATIC_PATH), name="static")
 
 class StartRequest(BaseModel):
     conv_idx: int
-    mode: str = "active"  # "active" | "vanilla"
+    mode: str = "active_memory"   # "active_memory" | "vanilla"
 
 
 @app.get("/")
@@ -469,7 +569,7 @@ def start(req: StartRequest) -> dict[str, Any]:
             detail=f"Benchmark already running (status={_state['status']}). "
                    "Reset before starting a new run.",
         )
-    mode = req.mode if req.mode in ("active", "vanilla") else "active"
+    mode = req.mode if req.mode in ("active_memory", "vanilla") else "active_memory"
     with _state_lock:
         _state.clear()
         _state.update(_idle_state())
@@ -511,6 +611,18 @@ def reset() -> dict[str, Any]:
     return {"ok": True}
 
 
+@app.get("/api/results")
+def get_results() -> dict[str, Any]:
+    """Return the current-run live results plus the history of past runs."""
+    with _state_lock:
+        current = _compute_results(_state)
+        current["status"] = _state["status"]
+        current["phase"]  = _state["phase"]
+    with _history_lock:
+        history = list(_run_history)
+    return {"current": current, "history": history}
+
+
 @app.get("/api/state")
 def get_state() -> dict[str, Any]:
     """Return a shallow copy of the global state dict (snapshot)."""
@@ -523,6 +635,7 @@ def get_state() -> dict[str, Any]:
             "mode":      _state["mode"],
             "conv_idx":  _state["conv_idx"],
             "conv_id":   _state["conv_id"],
+            "mode":      _state.get("mode", "active_memory"),
             "phase":     _state["phase"],
             "progress":  dict(_state["progress"]),
             "snapshot":  _state["snapshot"],
