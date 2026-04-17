@@ -96,6 +96,7 @@ LOG_TAIL_MAX = 200
 def _idle_state() -> dict[str, Any]:
     return {
         "status":    "idle",   # idle | running | paused | done | error
+        "mode":      "active", # "active" | "vanilla"
         "conv_idx":  None,
         "conv_id":   None,
         "phase":     None,     # "ingest" | "qa" | None
@@ -242,7 +243,7 @@ def _check_pause() -> bool:
 
 # ── Benchmark thread ─────────────────────────────────────────────────────────
 
-def _run_benchmark(conv_idx: int) -> None:
+def _run_benchmark(conv_idx: int, mode: str = "active") -> None:
     global _pipeline
     chroma_path = CHROMA_PATH_TEMPLATE.format(idx=conv_idx)
 
@@ -277,36 +278,43 @@ def _run_benchmark(conv_idx: int) -> None:
         )
 
         # ── Phase 1: ingest ───────────────────────────────────────────────────
-        for i, (u, a) in enumerate(pairs, 1):
-            if not _check_pause():
-                return
-            # Reset Curator decision so we can tell which turn produced the
-            # next warm-promotion line. Curator only runs on eviction.
-            _pipeline._curator._last_store  = None
-            _pipeline._curator._last_reason = None
-            _pipeline._curator._last_tier   = None
-            count_before = _pipeline.retrieval._collection.count()
-            _pipeline.ingest(u, a)
-            count_after  = _pipeline.retrieval._collection.count()
+        if mode == "vanilla":
             with _state_lock:
-                _state["progress"]["pairs_done"] = i
+                _state["progress"]["pairs_done"] = len(pairs)
+                _state["progress"]["pairs_total"] = len(pairs)
                 _state["snapshot"] = _snapshot(_pipeline)
-                cold_added = count_after - count_before
-                if cold_added > 0:
-                    _log(
-                        f"ingested pair {i}/{len(pairs)} — "
-                        f"auto-cold'd {cold_added} evicted pair(s), "
-                        f"total stored: {count_after}"
-                    )
-                else:
-                    _log(f"ingested pair {i}/{len(pairs)}")
-                # Surface warm-promotion decisions from the Curator.
-                cur = _pipeline._curator
-                if cur._last_store is True:
-                    _log(
-                        f"  -> curator promoted to {cur._last_tier or 'warm'}: "
-                        f"{cur._last_reason or '(no reason)'}"
-                    )
+                _log("vanilla mode — skipping ingest")
+        else:
+            for i, (u, a) in enumerate(pairs, 1):
+                if not _check_pause():
+                    return
+                # Reset Curator decision so we can tell which turn produced the
+                # next warm-promotion line. Curator only runs on eviction.
+                _pipeline._curator._last_store  = None
+                _pipeline._curator._last_reason = None
+                _pipeline._curator._last_tier   = None
+                count_before = _pipeline.retrieval._collection.count()
+                _pipeline.ingest(u, a)
+                count_after  = _pipeline.retrieval._collection.count()
+                with _state_lock:
+                    _state["progress"]["pairs_done"] = i
+                    _state["snapshot"] = _snapshot(_pipeline)
+                    cold_added = count_after - count_before
+                    if cold_added > 0:
+                        _log(
+                            f"ingested pair {i}/{len(pairs)} — "
+                            f"auto-cold'd {cold_added} evicted pair(s), "
+                            f"total stored: {count_after}"
+                        )
+                    else:
+                        _log(f"ingested pair {i}/{len(pairs)}")
+                    # Surface warm-promotion decisions from the Curator.
+                    cur = _pipeline._curator
+                    if cur._last_store is True:
+                        _log(
+                            f"  -> curator promoted to {cur._last_tier or 'warm'}: "
+                            f"{cur._last_reason or '(no reason)'}"
+                        )
 
         # ── Phase 2: Q&A ──────────────────────────────────────────────────────
         with _state_lock:
@@ -316,9 +324,15 @@ def _run_benchmark(conv_idx: int) -> None:
             if not _check_pause():
                 return
 
-            ctx       = _pipeline.build_context(q.question)
-            retrieved = copy.deepcopy(_pipeline._bucket.memories)
-            response  = _pipeline._backend.chat(ctx)
+            if mode == "active":
+                ctx       = _pipeline.build_context(q.question)
+                retrieved = copy.deepcopy(_pipeline._bucket.memories)
+                response  = _pipeline._backend.chat(ctx)
+            else:  # vanilla — bare model call, no memory injection
+                retrieved = []
+                response  = _pipeline._backend.chat(
+                    [{"role": "user", "content": q.question}]
+                )
             score     = _judge(q.question, q.answer, response,
                                model=DEFAULT_MODEL, base_url=AGENT_URL)
 
@@ -362,14 +376,14 @@ def _run_benchmark(conv_idx: int) -> None:
             _log(f"ERROR: {exc}")
 
 
-def _spawn(conv_idx: int) -> None:
+def _spawn(conv_idx: int, mode: str = "active") -> None:
     """Start a fresh benchmark thread.  Caller must ensure no thread is alive."""
     global _thread
     _stop_flag.clear()
     _pause_event.set()
     _thread = threading.Thread(
         target=_run_benchmark,
-        args=(conv_idx,),
+        args=(conv_idx, mode),
         name="locomo-bench",
         daemon=True,
     )
@@ -403,6 +417,7 @@ app.mount("/static", StaticFiles(directory=STATIC_PATH), name="static")
 
 class StartRequest(BaseModel):
     conv_idx: int
+    mode: str = "active"  # "active" | "vanilla"
 
 
 @app.get("/")
@@ -454,13 +469,14 @@ def start(req: StartRequest) -> dict[str, Any]:
             detail=f"Benchmark already running (status={_state['status']}). "
                    "Reset before starting a new run.",
         )
-    # Fresh state.
+    mode = req.mode if req.mode in ("active", "vanilla") else "active"
     with _state_lock:
         _state.clear()
         _state.update(_idle_state())
         _state["status"] = "running"
-        _log(f"start requested for conversation {req.conv_idx}")
-    _spawn(req.conv_idx)
+        _state["mode"]   = mode
+        _log(f"start requested for conversation {req.conv_idx} (mode={mode})")
+    _spawn(req.conv_idx, mode)
     return {"ok": True}
 
 
@@ -502,6 +518,7 @@ def get_state() -> dict[str, Any]:
         # everything else is JSON-friendly so a shallow copy is enough.
         return {
             "status":    _state["status"],
+            "mode":      _state["mode"],
             "conv_idx":  _state["conv_idx"],
             "conv_id":   _state["conv_id"],
             "phase":     _state["phase"],

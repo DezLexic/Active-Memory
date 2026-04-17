@@ -325,6 +325,66 @@
       padding: 14px 4px;
     }
 
+    /* ── Mode toggle ─────────────────────────────────────────────────── */
+    .mode-toggle {
+      display: flex;
+      gap: 6px;
+      margin-top: 12px;
+      margin-bottom: 2px;
+    }
+    .mode-toggle label {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      padding: 6px 0;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+      background: var(--panel);
+      transition: border-color 0.15s, color 0.15s;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+    .mode-toggle input[type="radio"] { display: none; }
+    .mode-toggle input[type="radio"]:checked + label {
+      color: var(--text);
+      border-color: var(--accent);
+    }
+    .mode-toggle input[type="radio"]#mode-vanilla:checked + label {
+      border-color: var(--warm);
+      color: var(--warm);
+    }
+
+    header .badge.mode-vanilla { color: var(--warm); border-color: var(--warm); }
+    header .badge.mode-active  { color: var(--good); border-color: var(--good); }
+
+    .vanilla-notice {
+      color: var(--muted);
+      font-style: italic;
+      font-size: 12px;
+      padding: 14px 4px;
+      border: 1px dashed var(--border);
+      border-radius: 4px;
+      text-align: center;
+    }
+
+    .qrow .vbadge {
+      display: inline-block;
+      font-size: 9px;
+      font-family: var(--mono);
+      padding: 1px 4px;
+      border-radius: 3px;
+      background: rgba(240,160,75,0.15);
+      color: var(--warm);
+      vertical-align: middle;
+      margin-left: 4px;
+    }
+
     /* ── Topic tree cards ────────────────────────────────────────────── */
     .topic-card {
       background: var(--panel);
@@ -386,6 +446,7 @@
     <h1>Active Memory — LoCoMo Inspector</h1>
     <span id="status-badge" class="badge status-idle">idle</span>
     <span id="phase-badge" class="badge"></span>
+    <span id="mode-badge" class="badge"></span>
     <span style="flex:1"></span>
     <span class="badge" id="conv-badge"></span>
   </header>
@@ -397,6 +458,13 @@
 
       <label for="conv-select">Conversation</label>
       <select id="conv-select"></select>
+
+      <div class="mode-toggle" style="margin-top:10px;">
+        <input type="radio" name="mode" id="mode-active"   value="active"  checked />
+        <label for="mode-active">Active Memory</label>
+        <input type="radio" name="mode" id="mode-vanilla"  value="vanilla" />
+        <label for="mode-vanilla">Vanilla</label>
+      </div>
 
       <div class="buttons">
         <button id="btn-start"  class="primary">Start</button>
@@ -558,6 +626,10 @@
       sb.textContent = s.status;
       const pb = document.getElementById("phase-badge");
       pb.textContent = s.phase ? "phase: " + s.phase : "";
+      const mb = document.getElementById("mode-badge");
+      const mode = s.mode || "active";
+      mb.className = "badge mode-" + mode;
+      mb.textContent = mode === "vanilla" ? "vanilla" : "active memory";
       const cb = document.getElementById("conv-badge");
       cb.textContent = s.conv_id ? `conv ${s.conv_id} (idx ${s.conv_idx})` : "";
 
@@ -606,14 +678,25 @@
       }
 
       // ── Questions list ──
-      renderQuestions(s.questions || []);
+      renderQuestions(s.questions || [], mode);
 
       // ── Snapshot panels ──
       if (snap) {
-        renderRecent(snap);
-        renderTopics(snap);
-        renderRetrieved(snap);
-        renderChroma(snap);
+        if (mode === "vanilla") {
+          const notice = '<div class="vanilla-notice">Not applicable — vanilla mode has no active memory.</div>';
+          ["recent-list","topic-tree-cards","retrieved-list","chroma-list"].forEach(id => {
+            document.getElementById(id).innerHTML = notice;
+          });
+          document.getElementById("topic-summary").textContent = "Not applicable — vanilla mode.";
+          document.getElementById("depth-label").textContent = "";
+          document.getElementById("retrieved-meta").textContent = "";
+          document.getElementById("chroma-info").textContent = "";
+        } else {
+          renderRecent(snap);
+          renderTopics(snap);
+          renderRetrieved(snap);
+          renderChroma(snap);
+        }
       }
 
       // ── Pinned Q&A detail ──
@@ -655,7 +738,7 @@
       `;
     }
 
-    function renderQuestions(qs) {
+    function renderQuestions(qs, mode) {
       const el = document.getElementById("questions-list");
       if (!qs.length) {
         el.className = "empty";
@@ -671,7 +754,7 @@
           <div class="qrow ${sel}" data-idx="${q.idx}">
             <div class="idx">${q.idx}</div>
             <div>
-              <span class="qcat">${escapeHtml(q.category)}</span>
+              <span class="qcat">${escapeHtml(q.category)}</span>${mode === "vanilla" ? ' <span class="vbadge">V</span>' : ""}
               <div class="qtext">${escapeHtml(q.question)}</div>
             </div>
             <div class="stars s${score}">${stars}</div>
@@ -922,11 +1005,12 @@
 
     // ── Buttons ──────────────────────────────────────────────────────
     document.getElementById("btn-start").addEventListener("click", async () => {
-      const idx = parseInt(document.getElementById("conv-select").value);
+      const idx  = parseInt(document.getElementById("conv-select").value);
+      const mode = document.querySelector('input[name="mode"]:checked').value;
       const r = await fetch("/api/start", {
         method:  "POST",
         headers: {"Content-Type": "application/json"},
-        body:    JSON.stringify({conv_idx: idx}),
+        body:    JSON.stringify({conv_idx: idx, mode}),
       });
       if (!r.ok) {
         const err = await r.json().catch(() => ({detail: r.statusText}));
