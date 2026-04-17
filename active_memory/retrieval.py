@@ -332,6 +332,18 @@ class Retrieval:
 
     # ── Dunder helpers ────────────────────────────────────────────────────────
 
+    def close(self) -> None:
+        """Release the ChromaDB client connection.
+
+        On Windows, the underlying SQLite file stays locked until the client
+        is explicitly stopped. Call this before deleting the chroma_path
+        directory to avoid PermissionError [WinError 32].
+        """
+        try:
+            self._client._system.stop()
+        except Exception:
+            pass
+
     def __repr__(self) -> str:
         return (
             f"Retrieval("

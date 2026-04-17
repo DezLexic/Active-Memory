@@ -500,7 +500,9 @@ def resume() -> dict[str, Any]:
 def reset() -> dict[str, Any]:
     global _pipeline
     _kill_running_thread()
-    _pipeline = None
+    if _pipeline is not None:
+        _pipeline.retrieval.close()
+        _pipeline = None
     _wipe_inspector_chroma()
     with _state_lock:
         _state.clear()
