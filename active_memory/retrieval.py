@@ -335,12 +335,21 @@ class Retrieval:
     def close(self) -> None:
         """Release the ChromaDB client connection.
 
-        On Windows, the underlying SQLite file stays locked until the client
-        is explicitly stopped. Call this before deleting the chroma_path
+        On Windows the underlying SQLite file stays locked until the client
+        is explicitly closed. Call this before deleting the chroma_path
         directory to avoid PermissionError [WinError 32].
+
+        clear_system_cache() is also called so that the next PersistentClient
+        pointed at the same path creates a fresh system instead of reusing the
+        now-stale cached one (which would raise "Could not connect to tenant
+        default_tenant" after the directory has been deleted).
         """
         try:
-            self._client._system.stop()
+            self._client.close()
+        except Exception:
+            pass
+        try:
+            type(self._client).clear_system_cache()
         except Exception:
             pass
 
