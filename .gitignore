@@ -6,6 +6,7 @@ chroma_db/
 chroma_db_*/
 .claude/
 .env
+docs/
 
 # Coverage artifacts
 .coverage

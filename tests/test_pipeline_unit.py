@@ -31,7 +31,7 @@ from tests.conftest import FakeBackend
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-_CURATOR_OK = '{"store": false, "reason": "unit test", "tier": "warm"}'
+_CURATOR_OK = '{"reason": "unit test", "tier": "cold"}'
 _OBS_REPLY  = (
     '{"topics": [{'
     '"id": "obs_update", "title": "Observer update", '
@@ -207,7 +207,7 @@ class TestUpdate:
             p.update(f"q{i}", f"a{i}", skip_observer=False)
         assert len(obs.calls) == 1
 
-    def test_eviction_calls_curator_in_batch_mode(self, tmp_path):
+    def test_eviction_calls_curator_for_each_evicted_pair(self, tmp_path):
         cur = FakeBackend(responses=[_CURATOR_OK] * 10)
         p = Pipeline(
             backend=FakeBackend(),
@@ -219,8 +219,7 @@ class TestUpdate:
         )
         for i in range(4):
             p.update(f"q{i}", f"a{i}")
-        # In batch mode, Curator is called once for the peek_curator_target pair
-        assert len(cur.calls) == 1
+        assert len(cur.calls) == 2
 
     def test_multiple_evictions_accumulate_observer_calls(self, tmp_path):
         obs = FakeBackend(responses=[_OBS_REPLY] * 10)
@@ -370,14 +369,13 @@ class TestIngest:
         )
         for i in range(4):
             p.ingest(f"q{i}", f"a{i}")
-        assert len(cur.calls) == 1
+        assert len(cur.calls) == 2
 
 
 # ── auto-cold storage on eviction ────────────────────────────────────────────
 
 class TestAutoColdStorage:
-    """Evicted pairs are written directly to cold storage regardless of
-    what the Curator decides about warm promotion."""
+    """Evicted pairs are written exactly once to the Curator-selected tier."""
 
     def _evicting_pipeline(self, tmp_path, *, obs_responses=None,
                            cur_responses=None):
@@ -399,40 +397,60 @@ class TestAutoColdStorage:
         p.ingest("q0", "a0")          # stack size 1 — no eviction
         assert p.retrieval._collection.count() == 0
 
-    def test_eviction_writes_all_popped_pairs_to_cold(self, tmp_path):
+    def test_eviction_writes_all_popped_pairs_once(self, tmp_path):
         p = self._evicting_pipeline(tmp_path)
         # 4th push triggers eviction of 2 pairs (batch_reduction=2)
         for i in range(4):
             p.ingest(f"q{i}", f"a{i}")
         meta = p.retrieval.get_all_metadata()
-        # All 2 evicted pairs must be in cold — regardless of Curator decision.
-        assert len(meta) >= 2
-        assert all(m["tier"] == "cold" for m in meta
-                   if m["tier"] == "cold"), "auto-cold entries should be cold"
+        assert len(meta) == 2
+        assert all(m["tier"] == "cold" for m in meta)
 
-    def test_curator_drop_does_not_block_cold_storage(self, tmp_path):
-        """Even if Curator returns store=false, auto-cold still fires."""
-        curator_drop = '{"store": false, "reason": "nothing important", "tier": "warm"}'
+    def test_curator_warm_classification_writes_to_warm_once(self, tmp_path):
+        curator_warm = '{"reason": "important", "tier": "warm"}'
         p = self._evicting_pipeline(
-            tmp_path, cur_responses=[curator_drop] * 20
+            tmp_path, cur_responses=[curator_warm] * 20
         )
         for i in range(4):
             p.ingest(f"q{i}", f"a{i}")
-        # Auto-cold wrote pairs; Curator said drop but that's for warm only.
-        assert p.retrieval._collection.count() >= 2
+        meta = p.retrieval.get_all_metadata()
+        assert len(meta) == 2
+        assert all(m["tier"] == "warm" for m in meta)
+
+    def test_curator_failure_falls_back_to_single_cold_write(self, tmp_path):
+        class ErrorBackend:
+            def chat(self, messages):
+                raise RuntimeError("Connection refused")
+
+            def __repr__(self):
+                return "ErrorBackend()"
+
+        p = Pipeline(
+            backend=FakeBackend(),
+            observer_backend=FakeBackend(responses=[_OBS_REPLY] * 5),
+            curator_backend=ErrorBackend(),
+            chroma_path=str(tmp_path),
+            max_recent_messages=3,
+            batch_reduction=2,
+        )
+        for i in range(4):
+            p.update(f"q{i}", f"a{i}")
+        meta = p.retrieval.get_all_metadata()
+        assert len(meta) == 2
+        assert all(m["tier"] == "cold" for m in meta)
 
     def test_update_also_auto_colds_evicted_pairs(self, tmp_path):
         p = self._evicting_pipeline(tmp_path)
         for i in range(4):
             p.update(f"q{i}", f"a{i}")
-        assert p.retrieval._collection.count() >= 2
+        assert p.retrieval._collection.count() == 2
 
     def test_multiple_evictions_accumulate_cold_entries(self, tmp_path):
         p = self._evicting_pipeline(tmp_path)
         # 4→first eviction (2 cold), 6→second eviction (2 more cold)
         for i in range(6):
             p.ingest(f"q{i}", f"a{i}")
-        assert p.retrieval._collection.count() >= 4
+        assert p.retrieval._collection.count() == 4
 
 
 # ── build_context / update manual loop ───────────────────────────────────────

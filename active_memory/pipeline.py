@@ -4,25 +4,23 @@ pipeline.py
 Orchestration layer that wires all components together.
 
 Sequence on every chat() call
-------------------------------
+-----------------------------
 1. bucket.set_current_prompt(user_message)
 2. retrieval.update_bucket(bucket, user_message)   -- inject relevant memories
 3. active_agent.respond(bucket)                    -- the only call user waits for
 4. bucket.push_message(user_message, response)     -- advance the recent stack
-5a. If a batch was evicted -> every evicted pair is auto-stored to cold (no LLM)
-5b. If a batch was evicted -> Observer receives the full batch list (one LLM call)
-5c. If a batch was evicted -> Curator evaluates the pair returned by
-    bucket.peek_curator_target() (one LLM call) and may promote it to warm
+5a. If a batch was evicted -> Observer receives the full batch list (one LLM call)
+5b. If a batch was evicted -> Curator classifies each evicted pair as warm or cold
+5c. If a batch was evicted -> Pipeline stores each pair exactly once to the chosen tier
 6. Return response string
 
 Both Observer and Curator calls are sequential (no daemon threads) to avoid
 Ollama queue contention on a single-instance setup.
 
-On eviction, every evicted pair is written to cold storage immediately with
-no LLM call — guaranteeing full conversation recall coverage.  Observer
-then receives the full evicted batch for topic-tree maintenance (one LLM
-call).  Curator evaluates the peeked mid-stack pair to decide whether it
-deserves warm priority (one LLM call per eviction).
+On eviction, Observer first receives the full evicted batch for topic-tree
+maintenance (one LLM call). Pipeline then asks Curator to classify each
+evicted pair and stores that pair once in the returned tier. If Curator
+fails or returns malformed output, the pair is stored as cold.
 
 Steps 1–2 and steps 4–5 are also exposed as public methods (build_context /
 update) so developers can insert their own model call between context
@@ -44,8 +42,6 @@ user-facing responses and a lightweight local model for bookkeeping tasks.
 """
 
 from __future__ import annotations
-
-import time
 
 from .bucket        import Bucket
 from .retrieval     import Retrieval
@@ -168,9 +164,8 @@ class Pipeline:
         5. If a batch was evicted:
            - Run Observer with the full batch list (one LLM call) unless
              skip_observer is True.
-           - If use_batch_mode is True, call peek_curator_target() and pass
-             the result to Curator (one LLM call for the mid-stack pair).
-             Otherwise fall back to evaluating each evicted pair in sequence.
+           - Ask Curator to classify each evicted pair.
+           - Store each evicted pair once to the chosen tier.
 
         Parameters
         ----------
@@ -187,27 +182,16 @@ class Pipeline:
 
         # 5. Sequential memory work — only when a batch was evicted.
         if popped is not None:
-            # 5a. Auto-store every evicted pair to cold.  This guarantees full
-            # conversation recall coverage without requiring an LLM call.  The
-            # Curator LLM call below only decides warm vs cold for the peeked
-            # pair — it is no longer the sole gate on what gets stored.
-            _ts = time.time()
-            for _pair in popped:
-                _combined = f"{_pair['question']} {_pair['response']}"
-                self._retrieval.store(_combined, _ts, tier="cold")
-
-            # 5b. Observer: update rolling topic tree with the evicted batch.
+            # 5a. Observer: update rolling topic tree with the evicted batch.
             if not skip_observer:
                 self._observer.update(bucket, popped)
 
-            # 5c. Curator: decide warm promotion for the peeked mid-stack pair.
-            if self._curator.use_batch_mode:
-                peeked = bucket.peek_curator_target()
-                if peeked is not None:
-                    self._curator.evaluate(peeked)
-            else:
-                for pair in popped:
-                    self._curator.evaluate(pair)
+            # 5b-5c. Curator classifies each evicted pair, then Pipeline stores
+            # it exactly once in the chosen tier.
+            for pair in popped:
+                tier = self._curator.evaluate(pair)
+                combined = f"{pair['question']} {pair['response']}"
+                self._retrieval.store(combined, tier=tier)
 
     def chat(self, user_message: str, skip_observer: bool = False) -> str:
         """
@@ -245,24 +229,15 @@ class Pipeline:
         popped = self._bucket.push_message(question, response)
 
         if popped is not None:
-            # Auto-store every evicted pair to cold (no LLM call needed).
-            _ts = time.time()
-            for _pair in popped:
-                _combined = f"{_pair['question']} {_pair['response']}"
-                self._retrieval.store(_combined, _ts, tier="cold")
-
             # Observer runs synchronously so the rolling summary is fully
             # built before the next pair is ingested.
             self._observer.update(self._bucket, popped)
 
-            # Curator: decide warm promotion for the stable mid-stack pair.
-            if self._curator.use_batch_mode:
-                peeked = self._bucket.peek_curator_target()
-                if peeked is not None:
-                    self._curator.evaluate(peeked)
-            else:
-                for pair in popped:
-                    self._curator.evaluate(pair)
+            # Curator classifies each evicted pair; Pipeline stores it once.
+            for pair in popped:
+                tier = self._curator.evaluate(pair)
+                combined = f"{pair['question']} {pair['response']}"
+                self._retrieval.store(combined, tier=tier)
 
     # ── Accessors ──────────────────────────────────────────────────────────────
 

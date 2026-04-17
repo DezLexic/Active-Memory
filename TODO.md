@@ -4,6 +4,51 @@ Backlog of improvements to tackle in future sessions. Roughly grouped by area.
 
 ---
 
+## Hiring / Portfolio Leverage
+
+- **README results section** — add a crisp “why this matters / how it was
+  evaluated / what improved” section near the top of `README.md`. Right now the
+  architecture is compelling, but the evidence is not legible fast enough for a
+  recruiter, hiring manager, or engineer doing a quick skim.
+
+- **Demo walkthrough** — create a short video or GIF-driven walkthrough of the
+  inspector showing the topic tree evolving, warm/cold memories landing, and a
+  benchmark question being answered with retrieved context. The project is more
+  impressive when people can see it working than when they only read about it.
+
+- **Real integration example** — add a concrete “before / after Active Memory”
+  example for a realistic long-running agent loop. Show the baseline flow, the
+  integration diff, and one example where memory changes the answer quality.
+
+- **Application positioning** — turn the project into resume / portfolio
+  language that frames the work as AI systems engineering rather than “a side
+  project.” Include a short summary emphasizing agent memory architecture,
+  evals, retrieval infrastructure, and debugging tooling.
+
+- **First-run trust pass** — tighten the repo’s onboarding experience so a
+  reviewer can clone it, understand setup, and form confidence quickly. This
+  includes fixing public doc mismatches, making the supported startup path
+  obvious, and ensuring the repo communicates stability instead of “work in
+  progress.”
+
+---
+
+## Immediate Trust / Correctness Fixes
+
+- **Fix duplicate memory writes on eviction** — `Pipeline.update()` and
+  `Pipeline.ingest()` auto-store evicted pairs to cold, but `Curator.evaluate()`
+  still stores the evaluated pair again. Refactor the Curator path so it
+  promotes or re-tiers an existing stored memory instead of creating duplicate
+  entries that can distort retrieval and counts.
+
+- **Align public startup docs with actual behavior** — the package docs still
+  imply `Pipeline()` has a zero-config Ollama fallback, but the current code
+  goes through `backend_from_env()` and raises when no backend is configured.
+  Either restore the fallback or update `README.md`, `active_memory/__init__.py`,
+  and related examples so first-run behavior matches what the code really does.
+
+---
+
 ## Retrieval
 
 - **Cap retrieval results** — the default `n_results` pulls up to 32 memories per

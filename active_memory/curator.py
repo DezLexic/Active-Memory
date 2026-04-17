@@ -1,33 +1,17 @@
 """
 curator.py
 
-Evaluates the stable mid-stack conversation pair (the one near the eviction
-boundary) and assigns it to the correct memory tier.  This runs after
-Pipeline has already auto-stored the full evicted batch to cold storage.
+Classifies an evicted conversation pair into the correct memory tier.
 
-The Curator's job is NOT to decide whether to store — Pipeline already
-handles that.  It decides whether the peeked pair deserves *warm* priority
-(frequent access, surfaced before cold results) vs *cold* (background
-reference, surfaced only when directly relevant).
-
-Warm = explicit decision, hard constraint, or active preference the agent
-will likely need soon.  Cold = everything else.
-
-The model returns:
-
-    {"store": true, "reason": "<one sentence>", "tier": "warm"|"cold"}
-
-"store" is always true in the new framing; on parse failure the pair is
-stored as cold (the safe default) rather than dropped silently.
+The Curator no longer writes to storage directly. Its only job is to decide
+whether a pair should end up in warm or cold storage, with cold as the safe
+fallback on any error.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import time
-
-from .retrieval     import Retrieval
 from .backends.base import LLMBackend
 from .monitor       import ProcessMonitor
 
@@ -36,27 +20,19 @@ logger = logging.getLogger(__name__)
 
 class Curator:
     """
-    Agent that assigns the mid-stack conversation pair to warm or cold tier.
-
-    Pipeline auto-stores the full evicted batch to cold storage before
-    calling Curator.  Curator's role is warm promotion: it decides whether
-    the peeked mid-stack pair deserves warm priority over the cold entries
-    that were already written.
+    Agent that classifies conversation pairs as warm or cold.
 
     Parameters
     ----------
     backend         Any LLMBackend-conforming object.
-    retrieval       A Retrieval instance that owns the Chroma collection.
-    use_batch_mode  When True, Pipeline passes the single pair returned by
-                    bucket.peek_curator_target() for warm-promotion evaluation.
-                    When False, Pipeline passes every evicted pair (legacy
-                    behaviour).  Default True.
+    use_batch_mode  Retained for backward compatibility with older pipeline
+                    flows. The current pipeline evaluates each evicted pair.
     """
 
     def __init__(
         self,
         backend: LLMBackend,
-        retrieval: Retrieval | None = None,
+        retrieval=None,
         use_batch_mode: bool = True,
     ) -> None:
         self._backend      = backend
@@ -65,17 +41,17 @@ class Curator:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def evaluate(self, popped_pair: dict[str, str]) -> None:
+    def evaluate(self, popped_pair: dict[str, str]) -> str:
         """
-        Evaluate a Q/A pair and store it to warm or cold in Chroma.
+        Evaluate a Q/A pair and return the chosen storage tier.
 
         Steps
         -----
         1. Build a triage prompt from the pair.
         2. Make one LLM call to decide warm vs cold tier.
         3. Parse the JSON response.
-        4. Store to the appropriate tier via retrieval.store().
-           On parse failure: defaults to cold (safe fallback, never drops).
+        4. Return the selected tier.
+           On parse failure: defaults to cold (safe fallback).
 
         Parameters
         ----------
@@ -83,7 +59,6 @@ class Curator:
         """
         question = popped_pair.get("question", "").strip()
         response = popped_pair.get("response", "").strip()
-        combined = f"{question} {response}"
 
         prompt = (
             "You are assigning a conversation exchange to the right memory "
@@ -103,8 +78,7 @@ class Curator:
             "  • Personal facts, stories, feelings, emotions, opinions\n"
             "  • Background information, descriptions, casual context\n"
             "  • When in doubt, cold.\n\n"
-            "Respond with a JSON object containing exactly three fields:\n"
-            "  store  : true\n"
+            "Respond with a JSON object containing exactly two fields:\n"
             "  reason : one sentence\n"
             "  tier   : \"warm\" or \"cold\"\n\n"
             "Respond with only the JSON object. No preamble, no commentary."
@@ -115,15 +89,12 @@ class Curator:
                 raw_text = self._backend.chat([{"role": "user", "content": prompt}])
         except Exception as exc:
             logger.error(
-                "Curator: LLM call failed (%s); storing as cold.", exc
+                "Curator: LLM call failed (%s); defaulting to cold.", exc
             )
-            # Safe fallback: cold rather than drop.
-            if self._retrieval is not None:
-                self._retrieval.store(combined, float(time.time()), tier="cold")
             self._last_store  = True
-            self._last_reason = f"(LLM failure — stored as cold: {exc})"
+            self._last_reason = f"(LLM failure — defaulted to cold: {exc})"
             self._last_tier   = "cold"
-            return
+            return "cold"
 
         try:
             # Strip markdown code fences if the model wraps its response.
@@ -139,32 +110,25 @@ class Curator:
             if isinstance(parsed, list):
                 parsed = parsed[0] if parsed else {}
 
-            store  = bool(parsed.get("store", True))   # default True — always store
             reason = str(parsed.get("reason", ""))
             tier   = str(parsed.get("tier", "cold")).lower().strip()
             if tier not in ("warm", "cold"):
                 tier = "cold"
         except (json.JSONDecodeError, KeyError, IndexError) as exc:
             logger.warning(
-                "Curator: JSON parse error (%s); raw=%r; storing as cold.",
+                "Curator: JSON parse error (%s); raw=%r; defaulting to cold.",
                 exc, raw_text,
             )
-            # Safe fallback: cold rather than drop.
-            if self._retrieval is not None:
-                self._retrieval.store(combined, float(time.time()), tier="cold")
             self._last_store  = True
-            self._last_reason = "(JSON parse failure — stored as cold)"
+            self._last_reason = "(JSON parse failure — defaulted to cold)"
             self._last_tier   = "cold"
-            return
-
-        if store and self._retrieval is not None:
-            timestamp = float(time.time())
-            self._retrieval.store(combined, timestamp, tier=tier)
+            return "cold"
 
         # Surface the decision for callers / test scripts that want visibility.
-        self._last_store  = store
+        self._last_store  = True
         self._last_reason = reason
         self._last_tier   = tier
+        return tier
 
     # ── Dunder helpers ─────────────────────────────────────────────────────────
 

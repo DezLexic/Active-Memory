@@ -31,8 +31,8 @@ class FakeBackend:
             result = self._responses[self._idx]
             self._idx += 1
             return result
-        # Default: well-formed Curator JSON that tells it not to store anything.
-        return '{"store": false, "reason": "unit test default", "tier": "warm"}'
+        # Default: well-formed Curator JSON that classifies to cold.
+        return '{"reason": "unit test default", "tier": "cold"}'
 
     def __repr__(self) -> str:
         return f"FakeBackend(calls={len(self.calls)})"

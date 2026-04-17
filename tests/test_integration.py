@@ -19,9 +19,9 @@ Eviction setup used across all tests
 When a single FakeBackend serves all roles, response ordering depends on
 which method drives the pipeline:
 
-  pipeline.update()  — no agent call → [observer, curator] per eviction
-  pipeline.ingest()  — no agent call → [observer, curator] per eviction
-  pipeline.chat()    — agent first   → [agent, observer, curator] per eviction turn
+  pipeline.update()  — no agent call → [observer, curator, curator] per eviction
+  pipeline.ingest()  — no agent call → [observer, curator, curator] per eviction
+  pipeline.chat()    — agent first   → [agent, observer, curator, curator] per eviction turn
 """
 
 import sys
@@ -53,15 +53,13 @@ _OBSERVER_TREE = json.dumps({
 })
 
 _CURATOR_STORE = json.dumps({
-    "store": True,
     "reason": "important information",
     "tier": "warm",
 })
 
 _CURATOR_DROP = json.dumps({
-    "store": False,
     "reason": "not important",
-    "tier": "warm",
+    "tier": "cold",
 })
 
 
@@ -167,8 +165,8 @@ class TestObserverTopicTreeFlow:
 class TestCuratorRetrievalRoundTrip:
     """Verify Pipeline → Curator → Retrieval stores and retrieves memories."""
 
-    def test_curator_store_true_lands_in_chroma(self, tmp_path):
-        """Curator store=true should persist at least 1 memory in Chroma."""
+    def test_curator_warm_classification_lands_in_chroma(self, tmp_path):
+        """Warm classification should persist memories in the warm tier."""
         # update() on eviction: Observer, then Curator.
         responses = [_OBSERVER_TREE, _CURATOR_STORE]
         pipe, _ = _pipeline(tmp_path, responses=responses)
@@ -177,12 +175,11 @@ class TestCuratorRetrievalRoundTrip:
             pipe.update(f"q{i}", f"a{i}")
 
         all_meta = pipe.retrieval.get_all_metadata()
-        assert len(all_meta) >= 1
-        # Verify it landed in warm tier
-        assert any(m["tier"] == "warm" for m in all_meta)
+        assert len(all_meta) == 2
+        assert all(m["tier"] == "warm" for m in all_meta)
 
     def test_stored_memory_surfaces_in_warm_collection(self, tmp_path):
-        """After Curator stores a memory, the warm collection count should increase."""
+        """Warm classification should write each evicted pair once."""
         responses = [_OBSERVER_TREE, _CURATOR_STORE]
         pipe, _ = _pipeline(tmp_path, responses=responses)
 
@@ -191,7 +188,7 @@ class TestCuratorRetrievalRoundTrip:
         for i in range(4):
             pipe.update(f"q{i}", f"a{i}")
 
-        assert pipe.retrieval._warm.count() > 0
+        assert pipe.retrieval._warm.count() == 2
 
 
 # ── TestIngestFlow ───────────────────────────────────────────────────────────
@@ -215,7 +212,7 @@ class TestIngestFlow:
         assert tree["topics"][0]["title"] == "Integration Test Topic"
 
     def test_ingest_many_pairs_builds_memories(self, tmp_path):
-        """Ingest 10 pairs with Curator returning store=true; memories accumulate."""
+        """Ingest 10 pairs with warm classification; memories accumulate."""
         # With max_recent=3, batch_reduction=2:
         #   push 1-3: no eviction
         #   push 4: eviction 1 → Observer + Curator
@@ -236,6 +233,5 @@ class TestIngestFlow:
 
         all_meta = pipe.retrieval.get_all_metadata()
         assert len(all_meta) >= 1
-        # Each eviction that triggers Curator with store=true should add a memory.
-        # The exact count depends on peek_curator_target returning non-None.
+        # Each eviction writes both evicted pairs once to the selected tier.
         assert pipe.retrieval._warm.count() > 0
