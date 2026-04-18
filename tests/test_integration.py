@@ -166,8 +166,9 @@ class TestCuratorRetrievalRoundTrip:
 
     def test_curator_warm_classification_lands_in_chroma(self, tmp_path):
         """Warm classification should persist memories in the warm tier."""
-        # update() on eviction: Observer, then Curator.
-        responses = [_OBSERVER_TREE, _CURATOR_STORE]
+        # update() on eviction: Observer, then Curator once per evicted pair.
+        # batch_reduction=2 → 2 pairs evicted → 2 Curator calls needed.
+        responses = [_OBSERVER_TREE, _CURATOR_STORE, _CURATOR_STORE]
         pipe, _ = _pipeline(tmp_path, responses=responses)
 
         for i in range(4):
@@ -179,7 +180,8 @@ class TestCuratorRetrievalRoundTrip:
 
     def test_stored_memory_surfaces_in_warm_collection(self, tmp_path):
         """Warm classification should write each evicted pair once."""
-        responses = [_OBSERVER_TREE, _CURATOR_STORE]
+        # batch_reduction=2 → 2 pairs evicted → 2 Curator calls needed.
+        responses = [_OBSERVER_TREE, _CURATOR_STORE, _CURATOR_STORE]
         pipe, _ = _pipeline(tmp_path, responses=responses)
 
         assert pipe.retrieval._warm.count() == 0
