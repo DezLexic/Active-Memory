@@ -33,9 +33,9 @@ class Observer:
     backend             Any LLMBackend-conforming object.
     max_summary_length  Deprecated. Retained for backward-compat; has no effect
                         since topic nodes now use typed slots (facts, decisions,
-                        preferences, open_threads, quotes) rather than a single
-                        prose summary. A 200-char soft limit per slot item is
-                        baked into the prompt.
+                        preferences, open_threads) rather than a single prose
+                        summary. A 200-char soft limit per slot item is baked
+                        into the prompt.
     """
 
     def __init__(
@@ -91,7 +91,7 @@ class Observer:
             "Each topic node must have this exact shape:\n"
             '  {"id": "<slug>", "title": "<short label>",\n'
             '   "facts": [...], "decisions": [...], "preferences": [...],\n'
-            '   "open_threads": [...], "quotes": [...],\n'
+            '   "open_threads": [...],\n'
             '   "subtopics": [...],\n'
             '   "created_at": <unix_ts>, "updated_at": <unix_ts>,\n'
             '   "updated_at_turn": <int>}\n\n'
@@ -113,11 +113,6 @@ class Observer:
             "  open_threads: Things raised but unresolved — the Active Agent should "
             "revisit these.\n"
             "                Example: 'Whether to keep or sell the family house.'\n\n"
-            "  quotes:       Verbatim excerpts worth preserving, with attribution "
-            'suffix " — <speaker>, turn <N>". Use for memorable or emotionally '
-            "charged statements that would lose meaning if paraphrased.\n"
-            "                Example: '\"Mom's voice still echoes out here.\" "
-            "— Jolene, turn 18'\n\n"
             "RULES:\n"
             "1. Merge new information into existing topics — do not create duplicate "
             "topics that cover the same subject.\n"

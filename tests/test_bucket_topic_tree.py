@@ -23,7 +23,6 @@ def _make_topic(
     decisions=None,
     preferences=None,
     open_threads=None,
-    quotes=None,
     updated_at_turn=0,
     subtopics=None,
 ):
@@ -35,7 +34,6 @@ def _make_topic(
         "decisions":    list(decisions or []),
         "preferences":  list(preferences or []),
         "open_threads": list(open_threads or []),
-        "quotes":       list(quotes or []),
         "subtopics":    subtopics or [],
         "created_at":   0,
         "updated_at":   0,
@@ -137,7 +135,6 @@ class TestGetSummaryText:
                 decisions=["decision one"],
                 preferences=["pref one"],
                 open_threads=["thread one"],
-                quotes=['"q one" — Jolene, turn 3'],
             )]
         }
         text = b.get_summary_text()
@@ -145,12 +142,10 @@ class TestGetSummaryText:
         assert "Decisions:" in text
         assert "Preferences:" in text
         assert "Open threads:" in text
-        assert "Quotes:" in text
         assert "• fact one" in text
         assert "• decision one" in text
         assert "• pref one" in text
         assert "• thread one" in text
-        assert '• "q one" — Jolene, turn 3' in text
 
     def test_empty_slots_are_omitted(self):
         """Unpopulated slots should not render a label."""

@@ -36,7 +36,7 @@ _OBS_REPLY  = (
     '{"topics": [{'
     '"id": "obs_update", "title": "Observer update", '
     '"facts": ["Updated."], "decisions": [], "preferences": [], '
-    '"open_threads": [], "quotes": [], '
+    '"open_threads": [], '
     '"subtopics": [], "created_at": 0, "updated_at": 0, "updated_at_turn": 0'
     '}]}'
 )

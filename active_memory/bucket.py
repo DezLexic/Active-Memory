@@ -99,7 +99,6 @@ class Bucket:
         ("decisions",    "Decisions"),
         ("preferences",  "Preferences"),
         ("open_threads", "Open threads"),
-        ("quotes",       "Quotes"),
     )
 
     def _flatten_topics(self, topics: list[dict], lines: list[str], depth: int) -> None:
@@ -150,7 +149,6 @@ class Bucket:
                     "decisions":    [],
                     "preferences":  [],
                     "open_threads": [],
-                    "quotes":       [],
                     "subtopics":    [],
                     "created_at":   now,
                     "updated_at":   now,

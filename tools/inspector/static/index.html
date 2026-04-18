@@ -881,7 +881,6 @@
       ["decisions",    "Decisions"],
       ["preferences",  "Preferences"],
       ["open_threads", "Open threads"],
-      ["quotes",       "Quotes"],
     ];
 
     function renderTopicCard(topic, turnCount) {
@@ -1047,6 +1046,20 @@
         <div class="detail-section">
           <h3>Agent Response</h3>
           <pre class="dump">${escapeHtml(q.response)}</pre>
+        </div>
+        <div class="detail-section">
+          <h3>Context Window</h3>
+          ${q.ctx_chars != null
+            ? `<div class="results-stat-row">
+                 <span class="k">estimated tokens</span>
+                 <span>~${Math.round((q.ctx_chars || 0) / 4).toLocaleString()}</span>
+               </div>
+               <div class="results-stat-row">
+                 <span class="k">characters</span>
+                 <span>${(q.ctx_chars || 0).toLocaleString()}</span>
+               </div>`
+            : '<div class="empty">Context size not available for this run.</div>'
+          }
         </div>
         <div class="detail-section">
           <h3>Surfaced Memories (${(q.retrieved || []).length})</h3>

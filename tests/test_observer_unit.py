@@ -34,7 +34,6 @@ def _make_tree(*titles: str) -> dict:
                 "decisions":    [],
                 "preferences":  [],
                 "open_threads": [],
-                "quotes":       [],
                 "subtopics":    [],
                 "created_at":   1000000,
                 "updated_at":   1000000,
@@ -119,8 +118,8 @@ class TestValidJsonResponse:
         assert len(bucket.topic_tree["topics"]) == 1
         assert bucket.topic_tree["topics"][0]["title"] == "Authentication"
         assert bucket.topic_tree["topics"][0]["id"] == "authentication"
-        # New typed-slot schema: every node should carry all five slot keys.
-        for slot in ("facts", "decisions", "preferences", "open_threads", "quotes"):
+        # New typed-slot schema: every node should carry all four slot keys.
+        for slot in ("facts", "decisions", "preferences", "open_threads"):
             assert slot in bucket.topic_tree["topics"][0]
 
     def test_multiple_topics_stored(self):
@@ -284,8 +283,7 @@ class TestMarkdownFenceStripping:
                     "decisions":    [],
                     "preferences":  [],
                     "open_threads": [],
-                    "quotes":       [],
-                    "subtopics":    [],
+                        "subtopics":    [],
                     "created_at":   1000000,
                     "updated_at":   1000000,
                     "updated_at_turn": 0,

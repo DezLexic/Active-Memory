@@ -356,12 +356,13 @@ def _run_benchmark(conv_idx: int, mode: str = "active") -> None:
 
             if mode == "vanilla":
                 retrieved = []
-                response  = _pipeline._backend.chat(
-                    [{"role": "user", "content": q.question}]
-                )
+                vanilla_ctx = [{"role": "user", "content": q.question}]
+                ctx_chars   = sum(len(m.get("content", "")) for m in vanilla_ctx)
+                response    = _pipeline._backend.chat(vanilla_ctx)
             else:  # active_memory — full memory-augmented context
                 ctx       = _pipeline.build_context(q.question)
                 retrieved = copy.deepcopy(_pipeline._bucket.memories)
+                ctx_chars = sum(len(m.get("content", "")) for m in ctx)
                 response  = _pipeline._backend.chat(ctx)
             score     = _judge(q.question, q.answer, response,
                                model=DEFAULT_MODEL, base_url=AGENT_URL)
@@ -376,6 +377,7 @@ def _run_benchmark(conv_idx: int, mode: str = "active") -> None:
                     "response":     response,
                     "score":        score,
                     "retrieved":    retrieved,
+                    "ctx_chars":    ctx_chars,
                 })
                 _state["progress"]["questions_done"] = i
                 _state["snapshot"] = _snapshot(_pipeline, last_query=q.question)

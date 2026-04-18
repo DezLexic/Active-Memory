@@ -44,7 +44,6 @@ _OBSERVER_TREE = json.dumps({
         "decisions":    [],
         "preferences":  [],
         "open_threads": [],
-        "quotes":       [],
         "subtopics":    [],
         "created_at":   0,
         "updated_at":   0,
